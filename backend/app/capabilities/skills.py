@@ -1,4 +1,5 @@
 """s07: skill loading — catalog first, full SKILL.md on demand (learn-claude-code)."""
+
 from pathlib import Path
 from typing import Any, Dict, Optional
 

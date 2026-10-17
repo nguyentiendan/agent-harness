@@ -20,14 +20,39 @@
 - Khôi phục nút xóa và dialog xác nhận; API chặn xóa session đang chạy/đang kết thúc, giữ nguyên file workspace.
 - API Files đọc được workspace của session đã lưu sau restart. Metrics chỉ tính events của lượt hiện tại.
 - `/compact` chặn khi đang chạy và đồng bộ lịch sử trong RAM/đĩa; đây vẫn là thu gọn tool output, không phải LLM summary.
-- Kiểm chứng: **10 unittest đạt**, Docker frontend build + TypeScript đạt. Chưa cập nhật container cho mốc này; sẽ triển khai cùng mốc refactor.
-- Mốc 2 đang làm: chuyển backend sang package `app/`, tests sang `tests/`, giữ URL API.
+- Kiểm chứng: **10 unittest đạt**, Docker frontend build + TypeScript đạt. Đã triển khai cùng mốc refactor.
+- Mốc 2 (chi tiết bên dưới): chuyển backend sang package `app/`, tests sang `tests/`, giữ URL API.
+
+## Cập nhật 2026-10-17 — Mốc 2: backend đã tách package
+
+- `app/main.py`: ghép FastAPI routers; Docker chạy `app.main:app`.
+- `app/api/`: schemas và routes; `app/services/`: session, run, files, approvals, commands.
+- `app/storage/`: persistence; `app/observability/`: metrics; `app/config.py`: cấu hình.
+- `app/agent/`: harness, session loop, goals, context, state, hooks, workspace.
+- `app/tools/`: registry, filesystem, shell, web; `app/security/`: permissions, paths, redaction.
+- `app/integrations/`: LLM và MCP; `app/capabilities/`: 7 cơ chế mở rộng.
+- `api_server.py` và `harness_core.py` chỉ còn adapter tương thích, không chứa logic trùng lặp.
+- Tests chuyển vào `backend/tests/`: **21 unittest đạt trên local và Docker (Python 3.12)**. Test dùng dữ liệu tạm và fake LLM.
+- Sửa race Stop ngay sau Start: luôn lưu terminal event, cho phép xóa/gửi tiếp sau khi task đã kết thúc.
+- Đã build và triển khai backend/frontend. HTTP frontend/API 200, DELETE route và SSE cursor đúng; 5 session hiện có được giữ nguyên. Chưa kiểm tra tương tác browser do thiếu quyền Computer Use.
+
+### Giới hạn còn lại và bước kế tiếp
+- Auth, Admin/User và cách ly file theo User chưa triển khai; đây là bước tiếp theo.
+- State của active runs/approvals vẫn trong RAM một process, chưa hỗ trợ nhiều worker hoặc khôi phục một run đang chạy sau restart.
+- Dữ liệu session vẫn lưu JSON; mỗi lượt kế tiếp nhận lịch sử user/assistant, không khôi phục toàn bộ tool transcript cho model.
+- Các kiểm thử sử dụng fake LLM/MCP, chưa xác minh gọi provider hoặc MCP server thật trong lần refactor này.
+
+### Lệnh kiểm tra backend
+```bash
+cd backend
+.venv/bin/python -m unittest discover -s tests -v
+```
 
 ## Tổng quan nhanh (đã xong)
 
 - **Frontend**: Next.js 16.3.3 chat UI (Enter-to-send, settings modal, sidebar workspace + sessions, Files, approval Allow/Deny) + Nginx.
 - **Backend**: FastAPI + agent loop thật (`AgentSession`) + `ToolRegistry` + `PermissionManager` (3 gates) + `HookSystem` + `GoalController`/`PromptGoalEvaluator` (goal loop) + context compaction.
-- **MCP** (`mcp_manager.py`) + **7 cơ chế port từ learn-claude-code**: skills, memory, tasks, background, scheduler, teams, workflow.
+- **MCP** (`app/integrations/mcp.py`) + **7 cơ chế port từ learn-claude-code**: skills, memory, tasks, background, scheduler, teams, workflow.
 - **Serving**: sessions persistence, workspaces list/create, approval broker, structured SSE events.
 - **Security**: workspace chỉ nhận tên (chặn absolute path), bash path guard + env sạch, container non-root + `cap_drop: ALL` + `no-new-privileges`.
 - **Observability**: LiteLLM Proxy gateway + Admin UI (`:4000/ui`) + Postgres.
@@ -59,11 +84,11 @@
 | | – **rate limits** | ⚠️ **Chỉ ở gateway** | LiteLLM có budget/rate-limit theo virtual key, nhưng app chưa enforce (chưa có user) |
 | **6** | **Observability** | 🟡 Chưa đủ | |
 | | – task succeed? | ⚠️ | Có goal evaluator + status; chưa có metric/scoring |
-| | – time taken? | ⚠️ | Có `created_at/updated_at` theo session; chưa có latency từng bước |
-| | – tools used? | ✅ | events + `progress.md` (chưa tổng hợp/đếm) |
-| | – model used? | ⚠️ | LiteLLM gateway log model/token/request; harness chưa ghi model vào session |
+| | – time taken? | ✅ Cơ bản | Có duration mỗi run; chưa có latency từng bước |
+| | – tools used? | ✅ | metrics đếm tool calls và breakdown theo tool |
+| | – model used? | ✅ Cơ bản | metrics lưu model được yêu cầu cho run; chưa có tracing chi tiết |
 
-**Kết luận:** chưa đầy đủ. Thiếu rõ **4 điểm** (browser tool, vector memory, rate limit tầng app, observability metric) + **1 lỗi nhỏ** (không persist step #).
+**Kết luận:** chưa đầy đủ. Còn thiếu browser chạy JS, vector memory, rate limit tầng app và tracing chi tiết; metrics cơ bản và persist step đã có.
 
 ---
 
@@ -83,7 +108,7 @@
 | 10 | UI cho tasks/teams/memory/workflow | Là tool của agent, chưa có panel (chỉ có Files) |
 | 11 | Cron always-on | Cron chỉ `poll_due()` lúc bắt đầu run, chưa có scheduler nền (heartbeat) |
 | 12 | Langfuse-style tracing (agent waterfall) | Có LiteLLM gateway (spend/token), chưa trace kiểu `agent.run → plan → tool → sub-agent` |
-| 13 | Unit test | Có 10 unittest hồi quy; chưa dùng pytest |
+| 13 | Unit test | Có 21 unittest hồi quy và contract; chưa dùng pytest |
 | 14 | **Browser tool** | 🟡 Một phần — có `web_fetch` (đọc URL + chặn SSRF); browser thật (JS) cần bật MCP Playwright + cài Node |
 | 15 | **Vector DB / semantic memory** | ❌ Memory hiện là file + keyword search, chưa có embedding/semantic retrieval (component 3) |
 | 16 | ~~**Observability metrics**~~ | ✅ **Đã xong** — metric mỗi run (duration / turns / tool calls / tools / approvals / model) + hiển thị trên UI |
@@ -128,14 +153,14 @@
 |---|---|
 | ~~Robustness LLM~~ | ✅ **Đã xong** — retry/backoff 3 lần (port từ hermes-agent) |
 | ~~Repetition~~ | ✅ **Đã xong** — repetition guard chặn agent lặp tool call 3 lần |
-| ~~Redaction~~ | ✅ **Đã xong** — mask secret trước khi lưu session (`redact.py`) |
+| ~~Redaction~~ | ✅ **Đã xong** — mask secret trước khi lưu session (`app/security/redaction.py`) |
 | ~~Persist step #~~ | ✅ **Đã xong** — `turns` ghi vào `state.json` mỗi turn qua `_checkpoint()` |
 | Isolation worktree | `run_subagent(workdir)` đang bỏ qua `workdir` → teammate dùng chung workspace |
 | Cron | Chỉ chạy lúc bắt đầu run; nên có scheduler nền nếu muốn assistant luôn-on |
 | ~~Observability metric~~ | ✅ **Đã xong** — metric mỗi run + hiển thị trên UI (chỉ còn tuỳ chọn Langfuse trace) |
-| Testing | Thêm pytest cho `check_bash_paths`, `TaskStore`, `PermissionManager`, path guard |
+| Testing | Đã có unittest cho path guard, permission, task tools, agent loop, session, API; mở rộng integration test với provider/MCP thật khi cần |
 | Storage | Sessions/tasks/memory đang file JSON; có thể dùng chung Postgres |
-| Code | `harness_core.py` ~1000 dòng, nên tách tiếp; docstring lẫn Anh/Việt |
+| Code | Đã tách backend thành package `app/` theo trách nhiệm; harness/core API cũ chỉ còn adapter |
 | Approval UX | Mới hỏi destructive bash; mở rộng + thêm "ghi nhớ quyết định" |
 | Config | Thêm env-override cho nhiều mục hơn |
 
@@ -180,4 +205,4 @@ Lịch sử user/assistant của các lượt trước được nạp vào run t
 6. UI panel (Tasks/Teams/Memory)
 7. Vector memory
 8. Workflow + skill mẫu
-9. Langfuse tracing + pytest
+9. Langfuse tracing + mở rộng integration tests

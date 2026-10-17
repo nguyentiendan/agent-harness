@@ -1,10 +1,12 @@
 """s09: memory — durable knowledge across sessions (learn-claude-code, adapted)."""
-import json
-import re
+
 from pathlib import Path
 from typing import Any, Dict, List
+import json
+import re
 
 import yaml
+
 
 MEMORY_TYPES = ("user", "feedback", "project", "reference")
 

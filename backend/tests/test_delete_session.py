@@ -14,22 +14,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-_TMP = tempfile.TemporaryDirectory()
-_ROOT = Path(_TMP.name)
-os.environ["HARNESS_DATA_DIR"] = str(_ROOT / "data")
-os.environ["WORKSPACES_ROOT"] = str(_ROOT / "workspaces")
-os.environ.setdefault("HARNESS_CONFIG", str(_ROOT / "missing-config.yaml"))
-
-from fastapi.testclient import TestClient  # noqa: E402
-
-import api_server  # noqa: E402
-
+from support import app, config, store, sessions_service, runtime, runs, workspaces, schemas, HTTPException, _ROOT
+from fastapi.testclient import TestClient
 
 def _seed(session_id: str, status: str = "completed", active: bool = False) -> None:
-    api_server.sessions[:] = [
-        s for s in api_server.sessions if s["session_id"] != session_id
+    store.sessions[:] = [
+        s for s in store.sessions if s["session_id"] != session_id
     ]
-    api_server.sessions.append(
+    store.sessions.append(
         {
             "session_id": session_id,
             "goal": "goal for " + session_id,
@@ -39,13 +31,13 @@ def _seed(session_id: str, status: str = "completed", active: bool = False) -> N
             "updated_at": 2.0,
         }
     )
-    api_server._save_sessions(api_server.sessions)
-    api_server.SESSION_EVENTS_DIR.mkdir(parents=True, exist_ok=True)
-    (api_server.SESSION_EVENTS_DIR / f"{session_id}.json").write_text(
+    store._save_sessions(store.sessions)
+    config.SESSION_EVENTS_DIR.mkdir(parents=True, exist_ok=True)
+    (config.SESSION_EVENTS_DIR / f"{session_id}.json").write_text(
         json.dumps([{"type": "assistant", "text": "hi"}]), encoding="utf-8"
     )
     if active:
-        api_server.active_sessions[session_id] = {
+        runtime.active_sessions[session_id] = {
             "status": status,
             "events": [],
             "workspace_path": str(_ROOT / "workspaces" / "default"),
@@ -56,12 +48,12 @@ def _seed(session_id: str, status: str = "completed", active: bool = False) -> N
 class DeleteSessionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.client = TestClient(api_server.app)
+        cls.client = TestClient(app)
 
     def tearDown(self) -> None:
-        api_server.sessions.clear()
-        api_server.active_sessions.clear()
-        api_server._save_sessions(api_server.sessions)
+        store.sessions.clear()
+        runtime.active_sessions.clear()
+        store._save_sessions(store.sessions)
 
     def test_delete_removes_record_and_events_file(self) -> None:
         _seed("session_done", active=True)
@@ -72,7 +64,7 @@ class DeleteSessionTests(unittest.TestCase):
         listed = self.client.get("/api/sessions").json()["sessions"]
         self.assertNotIn("session_done", [s["session_id"] for s in listed])
         self.assertFalse(
-            (api_server.SESSION_EVENTS_DIR / "session_done.json").exists()
+            (config.SESSION_EVENTS_DIR / "session_done.json").exists()
         )
         self.assertEqual(self.client.get("/api/sessions/session_done").status_code, 404)
 
@@ -88,7 +80,7 @@ class DeleteSessionTests(unittest.TestCase):
         listed = self.client.get("/api/sessions").json()["sessions"]
         self.assertIn("session_running", [s["session_id"] for s in listed])
         self.assertTrue(
-            (api_server.SESSION_EVENTS_DIR / "session_running.json").exists()
+            (config.SESSION_EVENTS_DIR / "session_running.json").exists()
         )
 
 

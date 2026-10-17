@@ -1,13 +1,15 @@
 """s12: cron scheduler — durable, session-scoped scheduled prompts (adapted)."""
-import json
-import secrets
-import threading
+
 from dataclasses import asdict, dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import json
 
-from tasks import _fn  # reuse schema helper
+from datetime import datetime
+import secrets
+import threading
+
+from app.capabilities.tasks import _fn
 
 
 def _cron_field(field: str, value: int) -> bool:

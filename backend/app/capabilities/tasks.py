@@ -1,10 +1,12 @@
 """s10: task system — file-backed dependency graph (learn-claude-code, adapted)."""
-import json
-import re
-import secrets
+
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import List, Optional
+import json
+import re
+
+import secrets
 
 TASK_ID_RE = re.compile(r"^task_[0-9a-f]{8}$")
 

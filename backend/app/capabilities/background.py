@@ -1,10 +1,13 @@
 """s11: background tasks — run slow bash commands off the main loop (adapted)."""
+
+from typing import Any, Dict
 import os
 import subprocess
-import threading
-from typing import Any, Dict
 
-from tasks import _fn  # reuse the small schema helper
+import threading
+
+from app.capabilities.tasks import _fn
+
 
 _BASH_ENV_KEEP = {"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TZ", "SHELL"}
 

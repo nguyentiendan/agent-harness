@@ -13,15 +13,15 @@ Do not implement Auth or change deployment security policy in this change.
 - [x] Restore session deletion (running sessions protected; workspace files retained).
 - [x] Connect UI send/load/delete flows, preserving commands and metrics.
 - [x] Run regression tests and frontend build; update STATUS and commit milestone 1.
-- [ ] Extract app/config.py, API schemas/routes, session storage, run/approval services,
+- [x] Extract app/config.py, API schemas/routes, session storage, run/approval services,
       metrics, agent orchestration/session/goals/context/state/hooks, tool registry
       and filesystem/shell/web tools, permission/path guards, LLM/MCP integrations,
       and existing capabilities into packages. Move tests to backend/tests.
-- [ ] Change Docker and documented entry points to app.main:app; retain thin legacy
+- [x] Change Docker and documented entry points to app.main:app; retain thin legacy
       launch/import adapters where useful, with no duplicated implementation.
-- [ ] Verify imports, API contracts, session/history/SSE, filesystem guards,
+- [x] Verify imports, API contracts, session/history/SSE, filesystem guards,
       commands/metrics/redaction and tool registrations after extraction.
-- [ ] Build Docker images, update running services, verify HTTP, update STATUS and
+- [x] Build Docker images, update running services, verify HTTP, update STATUS and
       README with actual test results and code map; commit milestone 2.
 
 ## Review focus
@@ -36,3 +36,9 @@ Use unittest with temporary directories and fake LLM/harness execution; no real
 provider calls or destructive commands. Use Docker build for production TypeScript
 and dependency checks. Verify live HTTP after deployment. Browser interaction
 verification is limited by unavailable Computer Use permission.
+
+## Outcome
+Milestone 1: commit `9d49751`. Milestone 2: 21 tests pass locally and in the
+Python 3.12 Docker image. Both images built and deployed; live HTTP/API contracts
+verified, all 5 existing session records preserved. Browser interaction checks
+remain unavailable because Computer Use permission is not granted.

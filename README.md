@@ -5,13 +5,20 @@ Next.js (TypeScript) dashboard served by Nginx.
 
 ## Structure
 
-- `backend/` — FastAPI API + Agent Harness core + MCP client + configuration.
-  - `api_server.py` — FastAPI REST / SSE server (sessions, workspaces, approvals, events).
-  - `harness_core.py` — Agent Harness Core: agent loop, tools, permission, hooks, goal loop.
-  - `skills.py` / `memory.py` / `tasks.py` / `background.py` / `scheduler.py` / `teams.py` / `workflow.py` — harness mechanisms ported from learn-claude-code (s07–s16).
-  - `mcp_manager.py` — MCP Client (Notion, Postgres, Filesystem...).
-  - `config.yaml` — System & MCP server configuration (single source of truth).
-  - `requirements.txt` / `Dockerfile` — Backend dependencies and image.
+- `backend/`
+  - `app/main.py` — FastAPI composition; ASGI entry point `app.main:app`.
+  - `app/api/routes/` / `app/api/schemas.py` — HTTP routes and request models.
+  - `app/services/` — run lifecycle, session history, files, approvals and commands.
+  - `app/storage/` — persisted sessions/events; `app/config.py` — runtime configuration.
+  - `app/agent/` — harness orchestration, agent loop, goals, state, context and hooks.
+  - `app/tools/` — registry and native filesystem/shell/web tools.
+  - `app/security/` — permission pipeline, path guards and secret redaction.
+  - `app/integrations/` — LiteLLM client and MCP client.
+  - `app/capabilities/` — skills, memory, tasks, background, scheduler, teams and workflow.
+  - `app/observability/` — per-run metrics.
+  - `tests/` — isolated regression and package-contract tests.
+  - `api_server.py` / `harness_core.py` — thin compatibility entry point/exports.
+  - `config.yaml` / `requirements.txt` / `Dockerfile` — configuration and deployment.
 - `frontend/` — Next.js 16 chat dashboard (TypeScript), built and served by Nginx.
 - `litellm/config.yaml` — LiteLLM Proxy (AI Gateway) config: models, keys, logging.
 - `docker-compose.yml` — Runs backend + frontend + LiteLLM gateway + Postgres.
@@ -69,7 +76,7 @@ Backend:
 ```bash
 cd backend
 pip install -r requirements.txt
-uvicorn api_server:app --host 0.0.0.0 --port 8000
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 Frontend:
@@ -80,3 +87,27 @@ npm run dev
 ```
 The dashboard defaults to same-origin `/api`; set the "API base URL" field to
 `http://localhost:8000` when running the frontend outside of Docker.
+
+## Backend tests
+
+Run from the backend directory:
+
+```bash
+cd backend
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Tests use temporary data/workspace directories and fake model responses. They do
+not read or delete real session history or call model providers. In Docker:
+
+```bash
+docker compose exec -T backend python -m unittest discover -s tests -v
+```
+
+## Conversations
+
+A session contains multiple user messages (runs). Follow-ups retain the original
+title and workspace and use previous user/assistant messages as context. SSE's
+`after` cursor skips previously displayed events. Deleting a stopped/completed
+session removes its history, while keeping workspace files. Authentication and
+per-user workspace isolation are not implemented yet.

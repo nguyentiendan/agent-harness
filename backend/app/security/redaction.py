@@ -1,5 +1,6 @@
 """Redact secrets from text before persisting/observing (adapted from the
 redaction idea in NousResearch/hermes-agent's agent/redact.py)."""
+
 import os
 import re
 

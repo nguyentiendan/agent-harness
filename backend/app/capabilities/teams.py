@@ -1,9 +1,11 @@
 """s13: agent teams — shared task queue + task-bound worktrees (adapted)."""
-import shutil
+
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from tasks import TaskStore, _fn
+import shutil
+
+from app.capabilities.tasks import TaskStore, _fn
 
 
 class WorktreeManager:

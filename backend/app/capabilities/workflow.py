@@ -4,14 +4,17 @@ A workflow is a Python async callable `fn(ctx, args)` that uses the primitives
 `ctx.agent / ctx.parallel / ctx.pipeline / ctx.phase / ctx.log`. Results are
 journaled so a resume can replay unchanged `agent()` calls from cache.
 """
-import asyncio
-import hashlib
-import json
-import secrets
+
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
+import asyncio
+import json
 
-from tasks import _fn  # reuse schema helper
+import hashlib
+import secrets
+
+from app.capabilities.tasks import _fn
+
 
 CONCURRENCY = 8
 

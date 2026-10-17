@@ -7,6 +7,7 @@
 
 ## Code Map
 
-- `backend/` — application source
+- `backend/app/` — backend packages; entry point `app.main:app`
+- `backend/tests/` — run from backend: `.venv/bin/python -m unittest discover -s tests -v`
 - `frontend/` — application source
 - `litellm/` — project configuration

@@ -8,7 +8,7 @@ services:
         UID: ${HARNESS_UID:-10001}
         GID: ${HARNESS_GID:-10001}
     container_name: harness-backend
-    command: uvicorn api_server:app --host 0.0.0.0 --port 8000
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     volumes:
