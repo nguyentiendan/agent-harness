@@ -3,6 +3,19 @@
 > Tổng hợp toàn bộ quá trình refactor từ đầu session.
 > Snapshot tại thời điểm viết; cập nhật khi có thay đổi.
 
+## Cập nhật 2026-10-17 — Spec và plan AI Platform (chưa triển khai)
+
+- Đã thống nhất bỏ workspace assignment: user tự tạo chat hoặc project cá nhân; hai role **Admin/User**, User chỉ thấy dữ liệu của mình, Admin quản trị/xem tất cả.
+- Chat độc lập có file riêng; chat trong cùng project dùng chung file và instructions, lịch sử vẫn riêng. Không sharing/chat giữa user ở v1.
+- Docker sandbox theo run, cấp khi cần công cụ; file bền vững theo chat/project. Không coi folder riêng hoặc container backend hiện tại là sandbox user.
+- Đã viết [spec](superpowers/specs/2026-10-17-ai-platform-design.md) và [implementation plan](superpowers/plans/2026-10-17-ai-platform.md), gồm 4 mốc/11 task: Auth + ownership/DB → sandbox → project UI → quota và rollout.
+- Plan có migration workspace cũ thành project import của Admin được chỉ định, backup/dry-run/idempotency; không xóa nguồn hoặc tự đoán owner.
+- Username/password do Admin cấp, PostgreSQL platform riêng và các mức tài nguyên là **mặc định đề xuất để review**, chưa phải chức năng đã có. Sandbox đầu offline; hard disk quota cần kiểm chứng trên host trước rollout nhiều user.
+- Lần này chỉ thay tài liệu; đã rà soát liên kết nội bộ, coverage spec/plan và whitespace diff. Chưa code Auth/sandbox, chưa migrate hoặc deploy; không chạy lại code tests cho thay đổi tài liệu.
+- Bước tiếp theo: review spec/plan và bắt đầu mốc Auth. Tool execution nhiều user chỉ mở sau khi đạt isolation tests của sandbox.
+
+---
+
 ## Cập nhật 2026-10-17 — Sidebar và modal/dropdown
 
 - Áp dụng skill local `.agents/skills/ui-ux-pro-max/SKILL.md`, giữ hệ màu teal/zinc và light/dark mode hiện tại.
@@ -109,7 +122,7 @@ cd backend
 | # | Mục | Ghi chú |
 |---|---|---|
 | 1 | Auth / đăng nhập | Chưa có user, login, session |
-| 2 | Tách workspace/session theo user | Chưa có ownership; mọi người dùng chung |
+| 2 | Chat/project cá nhân và ownership | Đã có spec/plan; chưa triển khai, bỏ workspace assignment |
 | 3 | Team thật (bậc 1) | Chưa có `Team`/`Teammate` định danh (role+model+prompt), chưa isolate worktree, chưa UI |
 | 4 | Team bậc 2 (mailbox + typed protocols) | Chưa có giao tiếp giữa teammate |
 | 5 | Sandbox thật (OS-level) | bash mới bị siết bằng policy, chưa cách ly container/network/resource |
@@ -130,9 +143,9 @@ cd backend
 
 ## 2. Chức năng CẦN LÀM (ưu tiên)
 
-1. **Auth + RBAC** — login, user, ownership workspace/session, phân quyền admin/member.
-2. **Sandbox thật** — container riêng mỗi session (hoặc bubblewrap/seccomp), giới hạn network/CPU/mem/disk.
-3. **Team bậc 1** — `Team` + `Teammate` persistent, isolate worktree thật, UI tạo team/task/xem tiến độ.
+1. **Auth + RBAC** — Admin/User, login/logout, ownership chat/project và migration DB theo spec/plan mới.
+2. **Docker sandbox** — container theo run, file bền vững theo chat/project; cách ly tool execution, kiểm chứng network/CPU/RAM/PID/disk trước rollout.
+3. **Project cá nhân + định mức** — hoàn thiện UI/file lifecycle và LiteLLM usage/budget theo user trước khi phát triển Team.
 4. **Browser tool** — cắm MCP browser (Playwright/Browser-Use) vào tool pool.
 5. **Tracing nâng cao** — metrics mỗi run đã có; waterfall/latency từng bước chưa có.
 6. **UI panel** cho Tasks / Teams / Memory.
@@ -209,12 +222,13 @@ Lịch sử user/assistant của các lượt trước được nạp vào run t
 ---
 ## Roadmap đề xuất
 
-1. Auth + RBAC
-2. Sandbox thật (tham khảo terminal backends của hermes-agent)
-3. Team bậc 1 (team + worktree isolation + UI)
-4. ~~Browser tool + persist step #~~ ✅ đã xong (browser thật vẫn là tuỳ chọn)
-5. ~~Observability metrics~~ ✅ đã xong
-6. UI panel (Tasks/Teams/Memory)
-7. Vector memory
-8. Workflow + skill mẫu
-9. Langfuse tracing + mở rộng integration tests
+1. Auth + RBAC, DB/ownership và migration (spec/plan 2026-10-17)
+2. Docker sandbox và file isolation
+3. Project cá nhân, định mức AI/tài nguyên và pilot
+4. Team bậc 1 (sau mốc platform; chưa thuộc v1)
+5. ~~Browser tool + persist step #~~ ✅ đã xong (browser thật vẫn là tuỳ chọn)
+6. ~~Observability metrics~~ ✅ đã xong
+7. UI panel (Tasks/Teams/Memory)
+8. Vector memory
+9. Workflow + skill mẫu
+10. Langfuse tracing + mở rộng integration tests
