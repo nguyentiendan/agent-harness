@@ -65,6 +65,46 @@ class SessionMessageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(api_server.sessions), 2)
         self.assertEqual(FakeHarness.calls[-1]['history'], [])
 
+    async def test_followup_in_memory_and_metrics_only_count_current_run(self):
+        await self.send('in_memory', 'First')
+        api_server.active_sessions['in_memory']['events'].append({'type': 'tool_call', 'name': 'old_tool'})
+        await self.send('in_memory', 'Second')
+        self.assertEqual(len(FakeHarness.calls[-1]['history']), 2)
+        self.assertEqual(api_server.sessions[0]['metrics']['tool_calls'], 0)
+        self.assertEqual(len(api_server.sessions), 1)
+
+    async def test_workspace_files_available_after_restart(self):
+        await self.send('files', 'First')
+        ws = api_server.resolve_workspace('default')
+        ws.mkdir(parents=True, exist_ok=True)
+        (ws / 'example.txt').write_text('preserved')
+        api_server.active_sessions.clear()
+        result = await api_server.read_workspace_file('files', 'example.txt')
+        self.assertEqual(result['content'], 'preserved')
+        await api_server.delete_session('files')
+        self.assertTrue((ws / 'example.txt').exists())
+
+    async def test_invalid_session_id_rejected(self):
+        with self.assertRaises(api_server.HTTPException) as raised:
+            await self.send('../escape', 'Message')
+        self.assertEqual(raised.exception.status_code, 400)
+
+    async def test_finalizing_run_blocks_delete_and_followup(self):
+        task = asyncio.create_task(asyncio.sleep(60))
+        api_server.active_sessions['finishing'] = {'status': 'stopped', 'task': task}
+        try:
+            with self.assertRaises(api_server.HTTPException) as raised:
+                await api_server.delete_session('finishing')
+            self.assertEqual(raised.exception.status_code, 409)
+            with self.assertRaises(api_server.HTTPException):
+                await self.send('finishing', 'Next')
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
     async def test_running_session_rejects_another_message(self):
         api_server.active_sessions['busy'] = {'status': 'running'}
         with self.assertRaises(api_server.HTTPException) as raised:

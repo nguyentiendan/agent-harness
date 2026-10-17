@@ -791,9 +791,10 @@ class AgentSession:
         except Exception as e:
             return f"{type(e).__name__}: {e}"
 
-    async def run(self, goal: str) -> SessionResult:
+    async def run(self, goal: str, history: Optional[List[Dict[str, Any]]] = None) -> SessionResult:
         self.messages = [
             {"role": "system", "content": self.system_prompt},
+            *(history or []),
             {"role": "user", "content": goal},
         ]
         self.goal.set_goal(goal)
@@ -950,7 +951,8 @@ class Harness:
         sections.append(rules)
         return "\n\n".join(sections)
 
-    async def run(self, goal: str, max_turns: Optional[int] = None, reviewer_model: Optional[str] = None) -> SessionResult:
+    async def run(self, goal: str, max_turns: Optional[int] = None, reviewer_model: Optional[str] = None,
+                  history: Optional[List[Dict[str, Any]]] = None) -> SessionResult:
         self._stop_requested = False
         print(f"=== Starting Agent Harness for Goal: '{goal}' ===")
 
@@ -1024,7 +1026,7 @@ class Harness:
             )
 
             self.state_mgr.log_progress(f"Starting agent for goal: {goal}")
-            result = await session.run(goal)
+            result = await session.run(goal, history=history)
             self.state_mgr.log_progress(f"Finished: {result.status} - {result.reason}")
 
             state = self.state_mgr.load_state()

@@ -23,7 +23,7 @@ export interface SessionSummary {
 }
 
 export interface HarnessEvent {
-  type: "tool_call" | "tool_result" | "assistant" | "approval" | "approval_result" | "status";
+  type: "user" | "tool_call" | "tool_result" | "assistant" | "approval" | "approval_result" | "status";
   [key: string]: unknown;
 }
 
@@ -90,7 +90,7 @@ export const startHarness = (
     workspace_path?: string | null;
   },
 ) =>
-  request<{ message: string; session_id: string; workspace: string }>(
+  request<{ message: string; session_id: string; workspace: string; event_offset: number }>(
     baseUrl,
     "/api/harness/start",
     {
@@ -150,8 +150,9 @@ export function streamEvents(
   baseUrl: string,
   sessionId: string,
   onEvent: (event: HarnessEvent) => void,
+  after = 0,
 ): () => void {
-  const url = buildUrl(baseUrl, `/api/harness/stream/${sessionId}`);
+  const url = buildUrl(baseUrl, `/api/harness/stream/${sessionId}?after=${after}`);
   const es = new EventSource(url);
 
   es.onmessage = (msg) => {
@@ -165,3 +166,7 @@ export function streamEvents(
 
   return () => es.close();
 }
+
+export const deleteSession = (baseUrl: string, sessionId: string) =>
+  request<{ message: string; session_id: string }>(baseUrl,
+    `/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createWorkspace,
+  deleteSession,
   getSessionEvents,
   listSessions,
   listWorkspaceFiles,
@@ -141,6 +142,11 @@ export default function Home() {
   const [workspace, setWorkspace] = useState("default");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const selectedRef = useRef("");
+  const sendingRef = useRef(false);
+  const [deleteTarget, setDeleteTarget] = useState<SessionSummary | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const [workspaces, setWorkspaces] = useState<string[]>(["default"]);
@@ -208,8 +214,11 @@ export default function Home() {
   }, [input]);
 
   const applyEvent = useCallback(
-    (ev: HarnessEvent) => {
+    (ev: HarnessEvent, replay = false) => {
       switch (ev.type) {
+        case "user":
+          setMessages((m) => [...m, { kind: "user", text: String(ev.text ?? "") }]);
+          break;
         case "tool_call":
           setMessages((m) => [
             ...m,
@@ -264,14 +273,16 @@ export default function Home() {
           });
           break;
         case "status":
-          setStatus(String(ev.status ?? "idle") as HarnessStatus);
+          if (!replay) setStatus(String(ev.status ?? "idle") as HarnessStatus);
           setMessages((m) => [
             ...m,
             { kind: "status", status: String(ev.status ?? ""), reason: String(ev.reason ?? "") },
           ]);
-          closeStreamRef.current?.();
-          refreshSessions();
-          refreshFiles();
+          if (!replay) {
+            closeStreamRef.current?.();
+            refreshSessions();
+            refreshFiles();
+          }
           break;
       }
     },
@@ -286,14 +297,16 @@ export default function Home() {
       await handleCommand(text);
       return;
     }
-    if (status === "running") return;
-    const id = `session_${Date.now()}`;
+    if (status === "running" || sendingRef.current) return;
+    sendingRef.current = true;
+    const id = currentSessionId || `session_${crypto.randomUUID()}`;
+    selectedRef.current = id;
     setInput("");
     setCurrentSessionId(id);
     setStatus("running");
-    setMessages((m) => [...m, { kind: "user", text }]);
+    closeStreamRef.current?.();
     try {
-      await startHarness(apiBaseUrl, {
+      const result = await startHarness(apiBaseUrl, {
         session_id: id,
         goal: text,
         max_turns: maxTurns === "" ? null : Number(maxTurns),
@@ -301,19 +314,28 @@ export default function Home() {
         reviewer_model: reviewerModel || null,
         workspace_path: workspace || null,
       });
-      closeStreamRef.current?.();
-      closeStreamRef.current = streamEvents(apiBaseUrl, id, applyEvent);
+      if (selectedRef.current !== id) return;
+      closeStreamRef.current = streamEvents(apiBaseUrl, id, (ev) => {
+        if (selectedRef.current === id) applyEvent(ev);
+      }, result.event_offset);
     } catch (e) {
+      if (selectedRef.current !== id) return;
+      setInput(text);
       setStatus("failed");
       setMessages((m) => [
         ...m,
         { kind: "status", status: "failed", reason: e instanceof Error ? e.message : String(e) },
       ]);
+    } finally {
+      sendingRef.current = false;
+      refreshSessions();
     }
-    refreshSessions();
   };
 
   const newSession = () => {
+    selectedRef.current = "";
+    setFiles([]);
+    setFileView(null);
     setInput("");
     closeStreamRef.current?.();
     setMessages([]);
@@ -394,22 +416,52 @@ export default function Home() {
   };
 
   const loadSession = async (sid: string) => {
+    selectedRef.current = sid;
     setCurrentSessionId(sid);
     setMessages([]);
+    setInput("");
+    setFiles([]);
+    setFileView(null);
+    setStatus("running");
     setSidebarOpen(false);
     closeStreamRef.current?.();
     const rec = sessions.find((s) => s.session_id === sid);
-    if (rec) {
-      setStatus((rec.status as HarnessStatus) || "idle");
-      setMessages([{ kind: "user", text: rec.goal }]);
-    }
+    if (rec) setWorkspace(rec.workspace.split(/[\\/]/).pop() || "default");
     try {
       const r = await getSessionEvents(apiBaseUrl, sid);
-      for (const ev of r.events) applyEvent(ev);
-    } catch {
-      // ignore
+      if (selectedRef.current !== sid) return;
+      if (rec && !r.events.some((ev) => ev.type === "user")) setMessages([{ kind: "user", text: rec.goal }]);
+      for (const ev of r.events) applyEvent(ev, true);
+      const latest = await listSessions(apiBaseUrl);
+      if (selectedRef.current !== sid) return;
+      const current = latest.sessions.find((s) => s.session_id === sid);
+      setSessions(latest.sessions);
+      setStatus((current?.status as HarnessStatus) || "idle");
+      if (current?.status === "running" || (rec?.status === "running" && r.events.at(-1)?.type !== "status")) {
+        closeStreamRef.current = streamEvents(apiBaseUrl, sid, (ev) => {
+          if (selectedRef.current === sid) applyEvent(ev);
+        }, r.events.length);
+      }
+    } catch (e) {
+      if (selectedRef.current === sid) {
+        setStatus("failed");
+        pushSystem(`Could not load session: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
-    refreshFiles();
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      await deleteSession(apiBaseUrl, deleteTarget.session_id);
+      if (selectedRef.current === deleteTarget.session_id) newSession();
+      setSessions((items) => items.filter((item) => item.session_id !== deleteTarget.session_id));
+      setDeleteTarget(null);
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : String(e));
+    } finally { setDeleting(false); }
   };
 
   const newWorkspace = async () => {
@@ -418,6 +470,7 @@ export default function Home() {
     try {
       await createWorkspace(apiBaseUrl, name.trim());
       await refreshWorkspaces();
+      newSession();
       setWorkspace(name.trim());
     } catch (e) {
       window.alert(e instanceof Error ? e.message : String(e));
@@ -506,11 +559,11 @@ export default function Home() {
         {sessions.map((s) => {
           const active = s.session_id === currentSessionId;
           return (
+            <div key={s.session_id} className="group relative flex items-center">
             <button
-              key={s.session_id}
               type="button"
               onClick={() => loadSession(s.session_id)}
-              className={`mb-0.5 w-full rounded-lg px-3 py-2.5 text-left transition-colors ${
+              className={`mb-0.5 min-w-0 w-full rounded-lg pl-3 pr-10 py-2.5 text-left transition-colors ${
                 active
                   ? "bg-white shadow-sm ring-1 ring-zinc-200 dark:bg-zinc-900 dark:ring-zinc-800"
                   : "hover:bg-zinc-200/60 dark:hover:bg-zinc-900"
@@ -524,6 +577,12 @@ export default function Home() {
                 <span>{timeAgo(s.updated_at)}</span>
               </div>
             </button>
+            <button type="button" aria-label={`Delete session: ${s.goal}`} title="Delete session"
+              onClick={() => { setDeleteTarget(s); setDeleteError(""); }}
+              className="absolute right-2 rounded p-1 text-zinc-400 hover:bg-rose-100 hover:text-rose-600 focus-visible:outline-2 dark:hover:bg-rose-950">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M3 6h18M8 6V3h8v3M5 6l1 15h12l1-15M10 10v7M14 10v7" /></svg>
+            </button>
+            </div>
           );
         })}
       </div>
@@ -692,6 +751,18 @@ export default function Home() {
         </div>
       </main>
 
+      {deleteTarget && (
+        <ModalShell title="Delete session" onClose={() => { if (!deleting) setDeleteTarget(null); }}>
+          <p className="mb-3 text-sm">Delete “{deleteTarget.goal}” and its conversation history? Workspace files will be kept.</p>
+          {deleteError && <p role="alert" className="mb-3 text-sm text-rose-600">{deleteError}</p>}
+          <div className="flex justify-end gap-3">
+            <button type="button" disabled={deleting} onClick={() => setDeleteTarget(null)} className="rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700">Cancel</button>
+            <button type="button" disabled={deleting || deleteTarget.status === "running"} onClick={confirmDelete} className="rounded-lg bg-rose-600 px-3 py-2 text-sm text-white disabled:opacity-40">{deleting ? "Deleting…" : "Delete session"}</button>
+          </div>
+          {deleteTarget.status === "running" && <p className="mt-3 text-sm text-amber-600">Stop this session before deleting it.</p>}
+        </ModalShell>
+      )}
+
       {settingsOpen && (
         <SettingsModal
           apiBaseUrl={apiBaseUrl}
@@ -703,7 +774,7 @@ export default function Home() {
           maxTurns={maxTurns}
           setMaxTurns={setMaxTurns}
           workspace={workspace}
-          setWorkspace={setWorkspace}
+          setWorkspace={(name) => { newSession(); setWorkspace(name); }}
           workspaces={workspaces}
           onNewWorkspace={newWorkspace}
           onClose={() => setSettingsOpen(false)}

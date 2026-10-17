@@ -12,6 +12,7 @@ Exposes the 7-Layer Agent Harness (Long Tasks) as an async REST + SSE API.
 import asyncio
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -63,10 +64,24 @@ def _save_sessions(records: List[Dict[str, Any]]):
     SESSIONS_FILE.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def session_events_path(session_id: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", session_id):
+        raise HTTPException(status_code=400, detail="Invalid session ID.")
+    path = (SESSION_EVENTS_DIR / f"{session_id}.json").resolve()
+    if not path.is_relative_to(SESSION_EVENTS_DIR.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid session path.")
+    return path
+
+
+def session_busy(session: Optional[Dict[str, Any]]) -> bool:
+    return bool(session and (session.get("status") == "running" or
+                (session.get("task") and not session["task"].done())))
+
+
 def _save_session_events(session_id: str, events: List[Dict[str, Any]]):
     SESSION_EVENTS_DIR.mkdir(parents=True, exist_ok=True)
     payload = redact_text(json.dumps(events, ensure_ascii=False))
-    (SESSION_EVENTS_DIR / f"{session_id}.json").write_text(payload, encoding="utf-8")
+    session_events_path(session_id).write_text(payload, encoding="utf-8")
 
 
 def _compute_metrics(events: List[Dict[str, Any]], started_at: float, status: str,
@@ -256,12 +271,40 @@ async def list_sessions():
     return {"sessions": result}
 
 
+def session_details(session_id: str) -> Dict[str, Any]:
+    if session_id in active_sessions:
+        return active_sessions[session_id]
+    record = next((s for s in sessions if s["session_id"] == session_id), None)
+    if not record:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return {**record, "workspace_path": str(resolve_workspace(Path(record["workspace"]).name)),
+            "model": (record.get("metrics") or {}).get("model", "")}
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session(session_id: str):
+    path = session_events_path(session_id)
+    active = active_sessions.get(session_id)
+    if active is None and not any(s["session_id"] == session_id for s in sessions):
+        raise HTTPException(status_code=404, detail="Session not found.")
+    if session_busy(active):
+        raise HTTPException(status_code=409, detail="This session is still running. Stop it before deleting.")
+    for aid, item in list(broker.pending.items()):
+        if item["session_id"] == session_id:
+            broker.resolve(aid, False)
+    active_sessions.pop(session_id, None)
+    sessions[:] = [s for s in sessions if s["session_id"] != session_id]
+    _save_sessions(sessions)
+    path.unlink(missing_ok=True)
+    return {"message": "Session deleted", "session_id": session_id}
+
+
 @app.get("/api/sessions/{session_id}")
 async def get_session(session_id: str):
     a = active_sessions.get(session_id)
     if a:
         return {"session_id": session_id, "events": a.get("events", [])}
-    f = SESSION_EVENTS_DIR / f"{session_id}.json"
+    f = session_events_path(session_id)
     if f.exists():
         try:
             return {"session_id": session_id, "events": json.loads(f.read_text(encoding="utf-8"))}
@@ -275,11 +318,22 @@ async def get_session(session_id: str):
 # ----------------------------------------------------------------------
 @app.post("/api/harness/start")
 async def start_harness(request: StartHarnessRequest):
-    if request.session_id in active_sessions:
-        raise HTTPException(status_code=400, detail="Session ID already exists.")
-
-    ws_abs = resolve_workspace(request.workspace_path or "default")
+    session_events_path(request.session_id)
+    active = active_sessions.get(request.session_id)
+    if session_busy(active):
+        raise HTTPException(status_code=409, detail="This session is still running.")
+    record = next((s for s in sessions if s["session_id"] == request.session_id), None)
+    workspace_name = Path(record["workspace"]).name if record else request.workspace_path
+    ws_abs = resolve_workspace(workspace_name or "default")
     events: List[Dict[str, Any]] = []
+    if active or record:
+        events = list((await get_session(request.session_id))["events"])
+        if record and not any(e.get("type") == "user" for e in events):
+            events.insert(0, {"type": "user", "text": record["goal"]})
+    history = [{"role": e["type"], "content": str(e.get("text", ""))}
+               for e in events if e.get("type") in ("user", "assistant")]
+    event_offset = len(events)
+    events.append({"type": "user", "text": request.goal})
 
     async def approve(name: str, args: Dict[str, Any], reason: str) -> bool:
         aid = broker.create(request.session_id, name, args, reason)
@@ -306,7 +360,9 @@ async def start_harness(request: StartHarnessRequest):
         "started_at": time.time(),
         "model": model_used,
     }
-    _record_session(request.session_id, goal=request.goal, status="running", workspace=str(ws_abs))
+    _record_session(request.session_id, goal=record["goal"] if record else request.goal,
+                    status="running", workspace=str(ws_abs), error="", result_text="")
+    _save_session_events(request.session_id, events)
 
     async def run_loop():
         status = "completed"
@@ -315,6 +371,7 @@ async def start_harness(request: StartHarnessRequest):
                 goal=request.goal,
                 max_turns=request.max_turns,
                 reviewer_model=request.reviewer_model,
+                history=history,
             )
             status = "stopped" if harness.is_stop_requested() else "completed"
             active_sessions[request.session_id]["status"] = status
@@ -335,7 +392,7 @@ async def start_harness(request: StartHarnessRequest):
             turns = int(StateManager(Path(session_info["workspace_path"])).load_state().get("turn", 0) or 0)
         except Exception:
             turns = 0
-        metrics = _compute_metrics(events, session_info.get("started_at", time.time()),
+        metrics = _compute_metrics(events[event_offset:], session_info.get("started_at", time.time()),
                                    status, session_info.get("model", ""), turns)
         session_info["metrics"] = metrics
 
@@ -348,7 +405,7 @@ async def start_harness(request: StartHarnessRequest):
     task = asyncio.create_task(run_loop())
     active_sessions[request.session_id]["task"] = task
     return {"message": "Harness session started", "session_id": request.session_id,
-            "workspace": str(ws_abs)}
+            "workspace": str(ws_abs), "event_offset": event_offset}
 
 
 @app.post("/api/harness/stop/{session_id}")
@@ -370,10 +427,7 @@ async def stop_harness(session_id: str):
 
 @app.get("/api/harness/status/{session_id}")
 async def get_status(session_id: str):
-    if session_id not in active_sessions:
-        raise HTTPException(status_code=404, detail="Session not found.")
-
-    session_info = active_sessions[session_id]
+    session_info = session_details(session_id)
     state_mgr = StateManager(Path(session_info["workspace_path"]))
     state_data = state_mgr.load_state()
 
@@ -391,10 +445,7 @@ async def get_status(session_id: str):
 
 @app.get("/api/harness/files/{session_id}")
 async def get_workspace_files(session_id: str):
-    if session_id not in active_sessions:
-        raise HTTPException(status_code=404, detail="Session not found.")
-
-    ws_path = Path(active_sessions[session_id]["workspace_path"])
+    ws_path = Path(session_details(session_id)["workspace_path"])
     files: Dict[str, Optional[str]] = {}
     for rel in WORKSPACE_FILES:
         p = ws_path / rel
@@ -404,10 +455,7 @@ async def get_workspace_files(session_id: str):
 
 @app.get("/api/harness/list/{session_id}")
 async def list_workspace(session_id: str):
-    if session_id not in active_sessions:
-        raise HTTPException(status_code=404, detail="Session not found.")
-
-    ws_path = Path(active_sessions[session_id]["workspace_path"])
+    ws_path = Path(session_details(session_id)["workspace_path"])
     entries: List[Dict[str, Any]] = []
     if ws_path.exists():
         for p in sorted(ws_path.rglob("*")):
@@ -425,9 +473,7 @@ async def list_workspace(session_id: str):
 @app.get("/api/harness/read/{session_id}")
 async def read_workspace_file(session_id: str, path: str):
     """Read a single workspace file (path is relative to the workspace root)."""
-    if session_id not in active_sessions:
-        raise HTTPException(status_code=404, detail="Session not found.")
-    ws_path = Path(active_sessions[session_id]["workspace_path"]).resolve()
+    ws_path = Path(session_details(session_id)["workspace_path"]).resolve()
     p = (ws_path / path).resolve()
     try:
         p.relative_to(ws_path)
@@ -476,7 +522,10 @@ async def run_command(payload: CommandRequest):
     if not cmd or cmd in ("help", "commands", "?"):
         return {"output": COMMAND_HELP}
 
-    session = active_sessions.get(payload.session_id or "")
+    try:
+        session = session_details(payload.session_id or "")
+    except HTTPException:
+        session = None
 
     if cmd == "status":
         if not session:
@@ -504,7 +553,11 @@ async def run_command(payload: CommandRequest):
 
     if cmd == "compact":
         sid = payload.session_id or ""
-        f = SESSION_EVENTS_DIR / f"{sid}.json"
+        if session_busy(active_sessions.get(sid)):
+            raise HTTPException(status_code=409, detail="Stop this session before compacting history.")
+        if not sid:
+            return {"output": "No stored history for this session yet."}
+        f = session_events_path(sid)
         if not sid or not f.exists():
             return {"output": "No stored history for this session yet."}
         try:
@@ -525,7 +578,9 @@ async def run_command(payload: CommandRequest):
             compacted.append(ev)
         after = len(json.dumps(compacted, ensure_ascii=False))
         try:
-            f.write_text(json.dumps(compacted, ensure_ascii=False), encoding="utf-8")
+            _save_session_events(sid, compacted)
+            if sid in active_sessions:
+                active_sessions[sid]["events"] = compacted
         except Exception as e:
             return {"output": f"Could not write history: {e}"}
         return {"output": (
@@ -565,19 +620,20 @@ async def run_command(payload: CommandRequest):
 # SSE: structured events for the chat UI
 # ----------------------------------------------------------------------
 @app.get("/api/harness/stream/{session_id}")
-async def stream_progress(session_id: str):
+async def stream_progress(session_id: str, after: int = 0):
     if session_id not in active_sessions:
         raise HTTPException(status_code=404, detail="Session not found.")
 
-    events = active_sessions[session_id]["events"]
+    session = active_sessions[session_id]
+    events = session["events"]
 
     async def event_generator():
-        idx = 0
+        idx = max(0, min(after, len(events)))
         while True:
             while idx < len(events):
                 yield f"data: {json.dumps(events[idx], ensure_ascii=False)}\n\n"
                 idx += 1
-            if active_sessions[session_id]["status"] in ["completed", "failed", "stopped"]:
+            if session["status"] in ["completed", "failed", "stopped"]:
                 break
             await asyncio.sleep(0.5)
 

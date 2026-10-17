@@ -9,9 +9,19 @@
 - Khôi phục dependency Tailwind 4.3.3 và PostCSS; giao diện chat Markdown, Settings/Files modal, sidebar mobile, collapse desktop và dark mode.
 - Giữ bản build cũ trong `.backups/tailwind-build-before-recovery.tar.gz` (không đưa vào Git).
 - Docker frontend build và TypeScript đã chạy đạt. Chưa kiểm tra tương tác trình duyệt: máy chưa cấp quyền Computer Use.
-- Phạm vi lần này là UI. Backend session continuity và DELETE session vẫn cần khôi phục; 6 kiểm thử backend đã thất bại ở lần đánh giá trước, không được xem là đã sửa trong bản UI này.
+- Phạm vi lần này là UI. Tại mốc UI, backend còn 6 kiểm thử thất bại; đã được xử lý ở mốc 1 bên dưới.
 
 ---
+
+## Cập nhật 2026-10-17 — Mốc 1: session và xóa session hoàn tất
+
+- Nhiều message dùng chung session, giữ tiêu đề/workspace; nạp lịch sử user/assistant cho lượt mới, kể cả sau restart.
+- SSE có cursor `after`; UI phát lại lịch sử không đóng stream bởi trạng thái cũ, không hiển thị trùng message.
+- Khôi phục nút xóa và dialog xác nhận; API chặn xóa session đang chạy/đang kết thúc, giữ nguyên file workspace.
+- API Files đọc được workspace của session đã lưu sau restart. Metrics chỉ tính events của lượt hiện tại.
+- `/compact` chặn khi đang chạy và đồng bộ lịch sử trong RAM/đĩa; đây vẫn là thu gọn tool output, không phải LLM summary.
+- Kiểm chứng: **10 unittest đạt**, Docker frontend build + TypeScript đạt. Chưa cập nhật container cho mốc này; sẽ triển khai cùng mốc refactor.
+- Mốc 2 đang làm: chuyển backend sang package `app/`, tests sang `tests/`, giữ URL API.
 
 ## Tổng quan nhanh (đã xong)
 
@@ -31,14 +41,14 @@
 
 | # | Component (sơ đồ) | Trạng thái | Chi tiết |
 |---|---|---|---|
-| **1** | **Agent State** | 🟢 Đủ (1 lỗi nhỏ) | |
+| **1** | **Agent State** | 🟢 Đủ | |
 | | – what's the goal? | ✅ | `GoalController.active_condition` + `state.json.goal` |
-| | – current step #? | ⚠️ **Chưa persist** | `turns` chỉ trong RAM, không ghi vào `state.json` → UI hiện Turn = 0 |
+| | – current step #? | ✅ | `_checkpoint()` persist turn mỗi bước |
 | | – observation from previous? | ✅ | tool result nằm trong `messages[]` |
 | **2** | **Tools** | 🟡 Thiếu browser | |
 | | – terminal | ✅ | `bash`, `bash_background` |
 | | – FileSystem | ✅ | `read_file`/`write_file`/`edit_file`/`glob`/`list_dir` |
-| | – **browser** | ❌ **Chưa có** | Không có tool browser/web (chỉ `curl` qua bash hoặc cắm MCP browser) |
+| | – **browser** | 🟡 Một phần | Có `web_fetch`; browser chạy JS cần MCP Playwright |
 | **3** | **Memory** | 🟡 Thiếu Vector DB | |
 | | – working memory | ✅ | Conversation + context compaction |
 | | – **Vector DB** | ❌ **Chưa có** | `memory.py` là file markdown + keyword search, chưa có embedding/semantic search |
@@ -73,7 +83,7 @@
 | 10 | UI cho tasks/teams/memory/workflow | Là tool của agent, chưa có panel (chỉ có Files) |
 | 11 | Cron always-on | Cron chỉ `poll_due()` lúc bắt đầu run, chưa có scheduler nền (heartbeat) |
 | 12 | Langfuse-style tracing (agent waterfall) | Có LiteLLM gateway (spend/token), chưa trace kiểu `agent.run → plan → tool → sub-agent` |
-| 13 | Unit test | Toàn smoke-test tay, chưa có pytest |
+| 13 | Unit test | Có 10 unittest hồi quy; chưa dùng pytest |
 | 14 | **Browser tool** | 🟡 Một phần — có `web_fetch` (đọc URL + chặn SSRF); browser thật (JS) cần bật MCP Playwright + cài Node |
 | 15 | **Vector DB / semantic memory** | ❌ Memory hiện là file + keyword search, chưa có embedding/semantic retrieval (component 3) |
 | 16 | ~~**Observability metrics**~~ | ✅ **Đã xong** — metric mỗi run (duration / turns / tool calls / tools / approvals / model) + hiển thị trên UI |
@@ -87,7 +97,7 @@
 2. **Sandbox thật** — container riêng mỗi session (hoặc bubblewrap/seccomp), giới hạn network/CPU/mem/disk.
 3. **Team bậc 1** — `Team` + `Teammate` persistent, isolate worktree thật, UI tạo team/task/xem tiến độ.
 4. **Browser tool** — cắm MCP browser (Playwright/Browser-Use) vào tool pool.
-5. **Observability metrics** — bảng metric: task succeed, time/step, tools used, model used.
+5. **Tracing nâng cao** — metrics mỗi run đã có; waterfall/latency từng bước chưa có.
 6. **UI panel** cho Tasks / Teams / Memory.
 7. **Vector memory** — thay/bổ sung keyword search bằng embedding + semantic retrieval.
 8. **Rate limit tầng app** — enforce theo user (sau khi có auth).
@@ -153,10 +163,11 @@
 | Security | Command approval, DM pairing, container isolation|
 
 ---
-## Lưu ý thật thà về /compact
-Vì kiến trúc hiện tại là mỗi message = 1 run mới (context riêng), nên không có "context sống" để nén giữa các lượt. Nên em implement /compact là nén lịch sử session đã lưu xuống đĩa (thu nhỏ tool output, có báo before → after). Trong run thì context đã được nén tự động rồi (cắt tool output 8k + trim transcript).
-
-👉 Muốn /compact đúng nghĩa Claude Code (nén context hội thoại liên tục), cần thêm conversation continuity — tức là gửi tin tiếp theo thì nối tiếp session cũ thay vì tạo session mới. 
+## Conversation continuity và /compact
+Mỗi message vẫn tạo một **run** mới nhưng tiếp tục trong cùng **session**.
+Lịch sử user/assistant của các lượt trước được nạp vào run tiếp theo; tool output
+được lưu để hiển thị, không phát lại toàn bộ làm ngữ cảnh model.
+`/compact` chỉ thu gọn tool output/args đã lưu, không tạo bản tóm tắt hội thoại bằng LLM.
 
 ---
 ## Roadmap đề xuất
