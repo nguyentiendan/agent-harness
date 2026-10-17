@@ -3,6 +3,16 @@
 > Tổng hợp toàn bộ quá trình refactor từ đầu session.
 > Snapshot tại thời điểm viết; cập nhật khi có thay đổi.
 
+## Cập nhật 2026-10-17 — Khôi phục giao diện Tailwind
+
+- Phục hồi `page.tsx` từ source map còn lưu trong `.next/dev`, ghép lại slash commands và run metrics của source hiện tại.
+- Khôi phục dependency Tailwind 4.3.3 và PostCSS; giao diện chat Markdown, Settings/Files modal, sidebar mobile, collapse desktop và dark mode.
+- Giữ bản build cũ trong `.backups/tailwind-build-before-recovery.tar.gz` (không đưa vào Git).
+- Docker frontend build và TypeScript đã chạy đạt. Chưa kiểm tra tương tác trình duyệt: máy chưa cấp quyền Computer Use.
+- Phạm vi lần này là UI. Backend session continuity và DELETE session vẫn cần khôi phục; 6 kiểm thử backend đã thất bại ở lần đánh giá trước, không được xem là đã sửa trong bản UI này.
+
+---
+
 ## Tổng quan nhanh (đã xong)
 
 - **Frontend**: Next.js 16.3.3 chat UI (Enter-to-send, settings modal, sidebar workspace + sessions, Files, approval Allow/Deny) + Nginx.
