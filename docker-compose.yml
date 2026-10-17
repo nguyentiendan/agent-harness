@@ -1,0 +1,88 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      args:
+        # On Linux, set HARNESS_UID/HARNESS_GID to your host `id -u` / `id -g`
+        # so the unprivileged container user can write the mounted volumes.
+        UID: ${HARNESS_UID:-10001}
+        GID: ${HARNESS_GID:-10001}
+    container_name: harness-backend
+    command: uvicorn api_server:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./workspace_data:/app/workspaces
+      - ./data:/app/data
+    environment:
+      # Provider API keys live ONLY in the LiteLLM gateway, not here.
+      - HARNESS_CONFIG=config.yaml
+      - WORKSPACES_ROOT=/app/workspaces
+      - HARNESS_DATA_DIR=/app/data
+      # Route every model call through the gateway (dashboards, keys, budgets).
+      - LITELLM_PROXY_URL=${LITELLM_PROXY_URL:-http://litellm:4000}
+      - LITELLM_PROXY_KEY=${LITELLM_VIRTUAL_KEY:-}
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-harness-master}
+    depends_on:
+      - litellm
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: harness-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------
+  # LiteLLM Proxy (AI Gateway) + its Postgres: admin UI, virtual keys,
+  # spend/token logs. Open http://localhost:4000/ui (admin / LITELLM_MASTER_KEY).
+  # ------------------------------------------------------------------
+  litellm:
+    image: docker.litellm.ai/berriai/litellm:main-stable
+    container_name: harness-litellm
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-harness-master}
+      - LITELLM_SALT_KEY=${LITELLM_SALT_KEY:-sk-harness-salt}
+      - DATABASE_URL=postgresql://litellm:${POSTGRES_PASSWORD:-litellm}@litellm-db:5432/litellm
+      - STORE_MODEL_IN_DB=True
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OLLAMA_API_BASE=${OLLAMA_API_BASE:-http://host.docker.internal:11434}
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  litellm-db:
+    image: postgres:16
+    container_name: harness-litellm-db
+    environment:
+      - POSTGRES_USER=litellm
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-litellm}
+      - POSTGRES_DB=litellm
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - litellm_db:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  litellm_db:

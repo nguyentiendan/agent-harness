@@ -1,0 +1,101 @@
+# Agent Harness Configuration File (v2 with MCP Support)
+workspace:
+  root_dir: "./workspaces/default"
+  default_rules_file: "rules.md"
+
+llm:
+  # Primary model for the main agent (LiteLLM format).
+  primary_model: "gpt-4o-mini"  # or gpt-4o, deepseek/deepseek-chat, ollama/llama3.3
+
+  # Model used by the independent goal evaluator.
+  reviewer_model: "gpt-4o-mini"  # or o3-mini, claude-3-5-haiku-20241022
+
+  reasoning_effort: "high"  # low, medium, high
+  temperature: 0.2
+  max_tokens: 4096
+
+# Model Context Protocol (MCP) Servers Configuration
+mcp_servers:
+  notion:
+    enabled: true
+    transport: "stdio"
+    command: "npx"
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-notion"
+    env:
+      NOTION_API_KEY: "your_notion_api_key_here"
+
+  postgres:
+    enabled: false
+    transport: "stdio"
+    command: "npx"
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-postgres"
+      - "postgresql://user:password@localhost:5432/mydb"
+
+  filesystem:
+    enabled: true
+    transport: "stdio"
+    command: "npx"
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-filesystem"
+      - "./workspace_demo"
+
+  # Real browser control (optional). Enable only if Node/npx is installed in
+  # the backend image; the built-in `web_fetch` tool works without it.
+  browser:
+    enabled: false
+    transport: "stdio"
+    command: "npx"
+    args:
+      - "-y"
+      - "@playwright/mcp@latest"
+
+execution:
+  max_turns: 15
+  auto_save_checkpoint: true
+
+  # How permission approval behaves:
+  #   ask          - destructive bash commands pause and ask the user (via the UI)
+  #   auto_deny    - destructive bash commands are blocked
+  #   auto_approve - destructive bash commands are allowed (logged)
+  approval_mode: "ask"
+
+  # Max consecutive times the goal evaluator may block the loop before giving up.
+  goal_block_cap: 8
+
+  # Timeout (seconds) for the bash tool.
+  bash_timeout: 120
+
+security:
+  # File tools may only touch these patterns' opposites: paths matching any
+  # pattern below are hard-blocked (never read or written).
+  deny_file_patterns:
+    - "*.env*"
+    - "*secrets*"
+    - "*credentials*"
+
+  # Bash sandboxing: block commands that step outside the workspace
+  # (cd to another directory, absolute paths elsewhere). Set restrict_paths
+  # to false to disable, or add more allowed_path_prefixes to relax it.
+  bash:
+    restrict_paths: true
+    allowed_path_prefixes:
+      - "/tmp"
+      - "/var/tmp"
+      - "/usr"
+      - "/bin"
+      - "/sbin"
+      - "/lib"
+      - "/lib64"
+      - "/opt"
+      - "/etc/ssl"
+      - "/etc/alternatives"
+      - "/proc/self"
+      - "/dev/null"
+      - "/dev/stdout"
+      - "/dev/stderr"
+      - "/dev/stdin"
