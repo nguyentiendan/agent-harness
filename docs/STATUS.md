@@ -3,6 +3,18 @@
 > Tổng hợp toàn bộ quá trình refactor từ đầu session.
 > Snapshot tại thời điểm viết; cập nhật khi có thay đổi.
 
+## Cập nhật 2026-10-17 — Sidebar và modal/dropdown
+
+- Áp dụng skill local `.agents/skills/ui-ux-pro-max/SKILL.md`, giữ hệ màu teal/zinc và light/dark mode hiện tại.
+- Sidebar desktop thu còn thanh icon 64px (không ẩn hoàn toàn), có nút mở lại, New session, New workspace, chọn workspace, Files, Settings và theme toggle.
+- Thay `window.prompt`/`window.alert` tạo workspace bằng modal giữa màn hình: form, validation, lỗi inline, trạng thái đang tạo và chống gửi lặp.
+- Settings chia nhóm model/execution/workspace, phần kết nối nâng cao thu gọn. Files có tìm kiếm, Refresh, số lượng/dung lượng và panel xem trước.
+- Dropdown dùng component chung, có selected state, phím mũi tên/Home/End/Enter/Escape và đóng khi click ngoài. Modal dùng native dialog để quản lý focus và Escape.
+- UI dùng các component riêng trong `frontend/app/components/`: controls, icons, workspace-modals; không thay đổi API/backend.
+- Kiểm tra: local và Docker production build + TypeScript đạt; đã triển khai frontend, xác minh bundle mới và frontend/API HTTP 200. Chưa kiểm tra tương tác trực tiếp vì Computer Use chưa được cấp quyền.
+
+---
+
 ## Cập nhật 2026-10-17 — Khôi phục giao diện Tailwind
 
 - Phục hồi `page.tsx` từ source map còn lưu trong `.next/dev`, ghép lại slash commands và run metrics của source hiện tại.

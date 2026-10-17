@@ -21,6 +21,9 @@ import {
 } from "../lib/api";
 import Markdown from "./markdown";
 import ThemeToggle from "./theme-toggle";
+import { Icon, PATHS } from "./components/icons";
+import { ModalShell, SelectField } from "./components/controls";
+import { SettingsModal, FilesModal, CreateWorkspaceModal } from "./components/workspace-modals";
 
 type ChatMessage =
   | { kind: "system"; text: string }
@@ -43,16 +46,6 @@ type ChatMessage =
       resolved?: "allowed" | "denied";
     }
   | { kind: "status"; status: string; reason?: string };
-
-const MODEL_OPTIONS = [
-  "gpt-4o-mini",
-  "gpt-4o",
-  "claude-3-7-sonnet-20250219",
-  "deepseek/deepseek-chat",
-  "deepseek/deepseek-reasoner",
-  "gemini/gemini-1.5-pro",
-  "ollama/llama3.3",
-];
 
 const SUGGESTIONS = [
   "Summarize the files in this workspace",
@@ -102,38 +95,6 @@ const DOT_STYLES: Record<string, string> = {
   idle: "bg-zinc-400",
 };
 
-function Icon({ d, size = 16 }: { d: string; size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d={d} />
-    </svg>
-  );
-}
-
-const PATHS = {
-  plus: "M5 12h14M12 5v14",
-  gear: "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
-  folder:
-    "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z",
-  panel: "M3 3h18v18H3zM9 3v18",
-  menu: "M4 6h16M4 12h16M4 18h16",
-  x: "M18 6 6 18M6 6l12 12",
-  send: "M12 19V5M5 12l7-7 7 7",
-  terminal: "m4 17 6-6-6-6M12 19h8",
-  file: "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z M14 2v4a2 2 0 0 0 2 2h4",
-  check: "M20 6 9 17l-5-5",
-};
-
 export default function Home() {
   const [apiBaseUrl, setApiBaseUrl] = useState("");
   const [primaryModel, setPrimaryModel] = useState("");
@@ -141,6 +102,8 @@ export default function Home() {
   const [maxTurns, setMaxTurns] = useState("5");
   const [workspace, setWorkspace] = useState("default");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
+  const returnToSettingsRef = useRef(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const selectedRef = useRef("");
   const sendingRef = useRef(false);
@@ -158,6 +121,9 @@ export default function Home() {
   const [input, setInput] = useState("");
 
   const [filesOpen, setFilesOpen] = useState(false);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [filesError, setFilesError] = useState("");
+  const fileRequestRef = useRef(0);
   const [files, setFiles] = useState<WorkspaceFileItem[]>([]);
   const [fileView, setFileView] = useState<{ path: string; content: string } | null>(null);
 
@@ -184,14 +150,17 @@ export default function Home() {
   }, [apiBaseUrl]);
 
   const refreshFiles = useCallback(async () => {
-    if (!currentSessionId) return;
+    const sid = selectedRef.current;
+    setFilesError("");
+    if (!sid) { setFiles([]); setFilesLoading(false); setFilesError("Open or start a session to browse its files."); return; }
+    setFilesLoading(true);
     try {
-      const r = await listWorkspaceFiles(apiBaseUrl, currentSessionId);
-      setFiles(r.files);
-    } catch {
-      // ignore
-    }
-  }, [apiBaseUrl, currentSessionId]);
+      const r = await listWorkspaceFiles(apiBaseUrl, sid);
+      if (selectedRef.current === sid) setFiles(r.files);
+    } catch (e) {
+      if (selectedRef.current === sid) setFilesError(e instanceof Error ? e.message : "Could not load files.");
+    } finally { if (selectedRef.current === sid) setFilesLoading(false); }
+  }, [apiBaseUrl]);
 
   useEffect(() => {
     refreshWorkspaces();
@@ -335,6 +304,9 @@ export default function Home() {
   const newSession = () => {
     selectedRef.current = "";
     setFiles([]);
+    setFilesLoading(false);
+    setFilesError("");
+    fileRequestRef.current++;
     setFileView(null);
     setInput("");
     closeStreamRef.current?.();
@@ -421,6 +393,9 @@ export default function Home() {
     setMessages([]);
     setInput("");
     setFiles([]);
+    setFilesLoading(false);
+    setFilesError("");
+    fileRequestRef.current++;
     setFileView(null);
     setStatus("running");
     setSidebarOpen(false);
@@ -464,26 +439,35 @@ export default function Home() {
     } finally { setDeleting(false); }
   };
 
-  const newWorkspace = async () => {
-    const name = window.prompt("New workspace name:");
-    if (!name || !name.trim()) return;
-    try {
-      await createWorkspace(apiBaseUrl, name.trim());
-      await refreshWorkspaces();
-      newSession();
-      setWorkspace(name.trim());
-    } catch (e) {
-      window.alert(e instanceof Error ? e.message : String(e));
-    }
+  const newWorkspace = () => {
+    returnToSettingsRef.current = settingsOpen;
+    setSettingsOpen(false);
+    setCreateWorkspaceOpen(true);
+  };
+
+  const closeCreateWorkspace = () => {
+    setCreateWorkspaceOpen(false);
+    if (returnToSettingsRef.current) setSettingsOpen(true);
+    returnToSettingsRef.current = false;
+  };
+
+  const submitWorkspace = async (name: string) => {
+    await createWorkspace(apiBaseUrl, name);
+    await refreshWorkspaces();
+    newSession();
+    setWorkspace(name);
   };
 
   const openFile = async (path: string) => {
-    if (!currentSessionId) return;
+    const sid = selectedRef.current;
+    if (!sid) return;
+    const request = ++fileRequestRef.current;
+    setFilesError("");
     try {
-      const r = await readWorkspaceFile(apiBaseUrl, currentSessionId, path);
-      setFileView({ path: r.path, content: r.content });
-    } catch {
-      // ignore
+      const r = await readWorkspaceFile(apiBaseUrl, sid, path);
+      if (request === fileRequestRef.current && sid === selectedRef.current) setFileView({ path: r.path, content: r.content });
+    } catch (e) {
+      if (request === fileRequestRef.current && sid === selectedRef.current) setFilesError(e instanceof Error ? e.message : "Could not preview file.");
     }
   };
 
@@ -499,7 +483,7 @@ export default function Home() {
   const currentMetrics = sessions.find((s) => s.session_id === currentSessionId)?.metrics;
 
   const sidebar = (
-    <div className="flex h-full flex-col">
+    <div className={`h-full flex-col ${sidebarCollapsed ? "flex md:hidden" : "flex"}`}>
       <div className="border-b border-zinc-200 p-4 dark:border-zinc-800">
         <div className="mb-4 flex items-center gap-2.5">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-600 text-white dark:bg-teal-500 dark:text-zinc-950">
@@ -511,10 +495,10 @@ export default function Home() {
             </div>
             <div className="text-[11px] text-zinc-500 dark:text-zinc-400">Long-running agent tasks</div>
           </div>
-          <button type="button" aria-label="Collapse sidebar" title="Collapse sidebar"
+          <button type="button" aria-label="Collapse sidebar" title="Collapse sidebar" aria-expanded={true}
             onClick={() => { setSidebarCollapsed(true); setSidebarOpen(false); }}
             className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-200 focus-visible:outline-2 focus-visible:outline-teal-600 dark:hover:bg-zinc-800">
-            <Icon d={PATHS.panel} size={18} />
+            <Icon d="M3 3h18v18H3zM9 3v18m8-14-3 3 3 3" size={18} />
           </button>
         </div>
         <button
@@ -528,17 +512,7 @@ export default function Home() {
           Workspace
         </label>
         <div className="flex gap-2">
-          <select
-            value={workspace}
-            onChange={(e) => setWorkspace(e.target.value)}
-            className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-2.5 py-2 text-[13px] text-zinc-800 transition-colors focus:border-teal-600 focus:ring-2 focus:ring-teal-600/20 focus:outline-none dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-teal-400"
-          >
-            {workspaces.map((w) => (
-              <option key={w} value={w}>
-                {w}
-              </option>
-            ))}
-          </select>
+          <div className="min-w-0 flex-1"><SelectField label="Workspace" value={workspace} options={workspaces.map((value) => ({ value, label: value }))} onChange={(value) => { if (value !== workspace) { newSession(); setWorkspace(value); } }} /></div>
           <button
             type="button"
             onClick={newWorkspace}
@@ -622,11 +596,22 @@ export default function Home() {
         />
       )}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-72 shrink-0 -translate-x-full border-r border-zinc-200 bg-zinc-50 transition-transform duration-200 md:static md:translate-x-0 dark:border-zinc-800 dark:bg-zinc-950 ${sidebarCollapsed ? "md:hidden" : ""} ${
+        className={`fixed inset-y-0 left-0 z-40 w-72 shrink-0 -translate-x-full border-r border-zinc-200 bg-zinc-50 transition-transform duration-200 md:static md:translate-x-0 dark:border-zinc-800 dark:bg-zinc-950 ${sidebarCollapsed ? "md:w-16" : "md:w-72"} ${
           sidebarOpen ? "translate-x-0" : ""
         }`}
       >
         {sidebar}
+        {sidebarCollapsed && <nav aria-label="Sidebar shortcuts" className="hidden h-full flex-col items-center gap-2 py-3 md:flex">
+          <button type="button" className="ui-icon-button" title="Expand sidebar" aria-label="Expand sidebar" aria-expanded={false} onClick={() => setSidebarCollapsed(false)}><Icon d="M3 3h18v18H3zM9 3v18m5-14 3 3-3 3" size={19} /></button>
+          <span className="my-1 h-px w-8 bg-zinc-200 dark:bg-zinc-800" />
+          <button type="button" className="ui-icon-button bg-teal-600 text-white hover:bg-teal-700 hover:text-white dark:text-white" title="New session" aria-label="New session" onClick={newSession}><Icon d={PATHS.plus} size={20} /></button>
+          <button type="button" className="ui-icon-button" title="New workspace" aria-label="New workspace" onClick={newWorkspace}><Icon d="M3 7h7l2-3h9v16H3zM12 10v6m-3-3h6" size={19} /></button>
+          <button type="button" className="ui-icon-button" title={`Workspace: ${workspace}`} aria-label="Choose workspace" onClick={() => setSidebarCollapsed(false)}><Icon d={PATHS.folder} size={19} /></button>
+          <div className="flex-1" />
+          <button type="button" className="ui-icon-button" title="Files" aria-label="Files" onClick={() => { setFilesOpen(true); setFileView(null); refreshFiles(); }}><Icon d={PATHS.file} size={19} /></button>
+          <button type="button" className="ui-icon-button" title="Settings" aria-label="Settings" onClick={() => setSettingsOpen(true)}><Icon d={PATHS.gear} size={19} /></button>
+          <ThemeToggle />
+        </nav>}
       </aside>
 
       <main className="flex h-full min-w-0 flex-1 flex-col bg-white dark:bg-zinc-950">
@@ -635,7 +620,7 @@ export default function Home() {
             type="button"
             aria-label="Open sidebar"
             onClick={() => { setSidebarOpen(true); setSidebarCollapsed(false); }}
-            className={`inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 ${sidebarCollapsed ? "" : "md:hidden"} dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100`}
+            className={`inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 md:hidden dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100`}
           >
             <Icon d={PATHS.menu} size={18} />
           </button>
@@ -763,6 +748,8 @@ export default function Home() {
         </ModalShell>
       )}
 
+      {createWorkspaceOpen && <CreateWorkspaceModal existing={workspaces} onCreate={submitWorkspace} onClose={closeCreateWorkspace} />}
+
       {settingsOpen && (
         <SettingsModal
           apiBaseUrl={apiBaseUrl}
@@ -774,7 +761,7 @@ export default function Home() {
           maxTurns={maxTurns}
           setMaxTurns={setMaxTurns}
           workspace={workspace}
-          setWorkspace={(name) => { newSession(); setWorkspace(name); }}
+          setWorkspace={(name) => { if (name !== workspace) { newSession(); setWorkspace(name); } }}
           workspaces={workspaces}
           onNewWorkspace={newWorkspace}
           onClose={() => setSettingsOpen(false)}
@@ -783,10 +770,14 @@ export default function Home() {
 
       {filesOpen && (
         <FilesModal
+          workspace={workspace}
+          loading={filesLoading}
+          error={filesError}
+          onRefresh={refreshFiles}
           files={files}
           fileView={fileView}
           onOpen={openFile}
-          onBack={() => setFileView(null)}
+          onBack={() => { fileRequestRef.current++; setFileView(null); }}
           onClose={() => setFilesOpen(false)}
         />
       )}
@@ -948,206 +939,5 @@ function ToolView({ m }: { m: Extract<ChatMessage, { kind: "tool" }> }) {
         )}
       </div>
     </div>
-  );
-}
-
-const inputCls =
-  "w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-[13px] text-zinc-900 transition-colors focus:border-teal-600 focus:ring-2 focus:ring-teal-600/20 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-teal-400 dark:focus:ring-teal-400/20";
-const labelCls = "mb-1.5 block text-[12px] font-semibold text-zinc-500 dark:text-zinc-400";
-
-function ModalShell({
-  title,
-  onClose,
-  children,
-}: {
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/50 p-4 backdrop-blur-[2px]"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-    >
-      <div
-        className="max-h-[86vh] w-full max-w-[520px] overflow-y-auto rounded-xl bg-white p-5 shadow-2xl ring-1 ring-zinc-950/5 dark:bg-zinc-900 dark:ring-white/10"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-[16px] font-bold tracking-tight text-zinc-900 dark:text-zinc-50">{title}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-          >
-            <Icon d={PATHS.x} size={16} />
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function SettingsModal(props: {
-  apiBaseUrl: string;
-  setApiBaseUrl: (v: string) => void;
-  primaryModel: string;
-  setPrimaryModel: (v: string) => void;
-  reviewerModel: string;
-  setReviewerModel: (v: string) => void;
-  maxTurns: string;
-  setMaxTurns: (v: string) => void;
-  workspace: string;
-  setWorkspace: (v: string) => void;
-  workspaces: string[];
-  onNewWorkspace: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <ModalShell title="Settings" onClose={props.onClose}>
-      <div className="space-y-4">
-        <div>
-          <label className={labelCls} htmlFor="setting-api-url">API base URL</label>
-          <input
-            id="setting-api-url"
-            className={inputCls}
-            value={props.apiBaseUrl}
-            onChange={(e) => props.setApiBaseUrl(e.target.value)}
-            placeholder="Leave empty for same origin"
-          />
-        </div>
-        <div>
-          <label className={labelCls} htmlFor="setting-primary-model">Primary agent model</label>
-          <select
-            id="setting-primary-model"
-            className={inputCls}
-            value={props.primaryModel}
-            onChange={(e) => props.setPrimaryModel(e.target.value)}
-          >
-            <option value="">Use config default</option>
-            {MODEL_OPTIONS.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className={labelCls} htmlFor="setting-reviewer-model">Reviewer model</label>
-          <select
-            id="setting-reviewer-model"
-            className={inputCls}
-            value={props.reviewerModel}
-            onChange={(e) => props.setReviewerModel(e.target.value)}
-          >
-            <option value="">Use config default</option>
-            {MODEL_OPTIONS.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className={labelCls} htmlFor="setting-max-turns">Max turns</label>
-          <input
-            id="setting-max-turns"
-            className={inputCls}
-            type="number"
-            min={1}
-            value={props.maxTurns}
-            onChange={(e) => props.setMaxTurns(e.target.value)}
-          />
-        </div>
-        <div>
-          <label className={labelCls} htmlFor="setting-workspace">Workspace</label>
-          <div className="flex gap-2">
-            <select
-              id="setting-workspace"
-              className={inputCls}
-              value={props.workspace}
-              onChange={(e) => props.setWorkspace(e.target.value)}
-            >
-              {props.workspaces.map((w) => (
-                <option key={w} value={w}>
-                  {w}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={props.onNewWorkspace}
-              className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
-            >
-              <Icon d={PATHS.plus} size={14} /> New
-            </button>
-          </div>
-        </div>
-      </div>
-      <div className="mt-5 flex justify-end">
-        <button
-          type="button"
-          onClick={props.onClose}
-          className="rounded-lg bg-zinc-900 px-4 py-2 text-[13px] font-semibold text-white transition-colors hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
-        >
-          Done
-        </button>
-      </div>
-    </ModalShell>
-  );
-}
-
-function FilesModal(props: {
-  files: WorkspaceFileItem[];
-  fileView: { path: string; content: string } | null;
-  onOpen: (path: string) => void;
-  onBack: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <ModalShell title="Workspace Files" onClose={props.onClose}>
-      {props.fileView ? (
-        <div>
-          <button
-            type="button"
-            onClick={props.onBack}
-            className="mb-3 rounded-lg bg-zinc-100 px-3 py-1.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
-          >
-            ← Back
-          </button>
-          <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold break-all text-zinc-800 dark:text-zinc-100">
-            <Icon d={PATHS.file} size={15} /> {props.fileView.path}
-          </div>
-          <pre className="max-h-[60vh] overflow-y-auto rounded-lg bg-zinc-950 p-3 font-mono text-[12.5px] leading-relaxed break-words whitespace-pre-wrap text-zinc-100">
-            {props.fileView.content}
-          </pre>
-        </div>
-      ) : props.files.length === 0 ? (
-        <p className="py-6 text-center text-[13px] text-zinc-400 dark:text-zinc-500">No files yet.</p>
-      ) : (
-        <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
-          {props.files.map((f) => (
-            <li key={f.path}>
-              <button
-                type="button"
-                onClick={() => props.onOpen(f.path)}
-                className="flex w-full items-center gap-2.5 px-1 py-2.5 text-left transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
-              >
-                <span className="shrink-0 text-zinc-400 dark:text-zinc-500">
-                  <Icon d={PATHS.file} size={15} />
-                </span>
-                <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-700 dark:text-zinc-200">{f.path}</span>
-                <span className="shrink-0 text-[12px] text-zinc-400 tabular-nums dark:text-zinc-500">{f.size} B</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </ModalShell>
   );
 }
