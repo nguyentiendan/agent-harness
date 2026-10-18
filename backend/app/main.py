@@ -1,12 +1,51 @@
-"""FastAPI application composition and public ASGI entry point."""
+"""Authenticated platform entry point. Legacy service modules are not HTTP routes."""
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from app.platform import auth, routes, chat
 
-from app.api.routes import approvals, commands, config, runs, sessions, workspaces
 
-app = FastAPI(title="Agent Harness API", description="Backend API wrapper for 7-Layer Agent Harness (Long Tasks)", version="1.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
-                   allow_methods=["*"], allow_headers=["*"])
-for module in (config, workspaces, sessions, runs, approvals, commands):
-    app.include_router(module.router)
+@asynccontextmanager
+async def lifespan(app):
+    chat.reconcile()
+    from app.cli.cleanup import purge
+
+    purge()
+    yield
+    for rid in list(chat.running):
+        await chat.stop_run(rid)
+
+
+app = FastAPI(title="AI Platform API", version="2.0.0", lifespan=lifespan)
+app.include_router(auth.router)
+app.include_router(routes.router)
+
+
+@app.middleware("http")
+async def private_responses(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(request, error):
+    # Pydantic includes raw input by default, which can expose passwords.
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": "Invalid request fields.",
+            "errors": [
+                {"loc": list(e["loc"]), "msg": e["msg"], "type": e["type"]}
+                for e in error.errors()
+            ],
+        },
+    )

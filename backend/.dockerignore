@@ -10,3 +10,8 @@ venv/
 
 # Local workspace data (mounted at runtime)
 workspace_data/
+
+# Legacy runtime folders are never application image contents
+data/
+workspaces/
+backend/

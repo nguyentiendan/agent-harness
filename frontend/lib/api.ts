@@ -1,3 +1,4 @@
+import { apiRequest } from "./auth";
 export type HarnessStatus = "running" | "completed" | "failed" | "stopped";
 
 export interface RunMetrics {
@@ -15,6 +16,8 @@ export interface SessionSummary {
   goal: string;
   status: HarnessStatus | string;
   workspace: string;
+  owner_id: string;
+  owner_username: string;
   created_at: number;
   updated_at: number;
   result_text?: string;
@@ -23,7 +26,14 @@ export interface SessionSummary {
 }
 
 export interface HarnessEvent {
-  type: "user" | "tool_call" | "tool_result" | "assistant" | "approval" | "approval_result" | "status";
+  type:
+    | "user"
+    | "tool_call"
+    | "tool_result"
+    | "assistant"
+    | "approval"
+    | "approval_result"
+    | "status";
   [key: string]: unknown;
 }
 
@@ -46,31 +56,28 @@ export function buildUrl(baseUrl: string, path: string): string {
   return `${base}${path}`;
 }
 
-async function request<T>(baseUrl: string, path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(buildUrl(baseUrl, path), init);
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Request failed (${res.status}): ${text}`);
-  }
-  return res.json() as Promise<T>;
+async function request<T>(
+  _baseUrl: string,
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  return apiRequest<T>(path, init);
 }
+export const createSession = () =>
+  apiRequest<SessionSummary>("/api/sessions", { method: "POST", body: "{}" });
 
 // Config / workspaces / sessions
 export const fetchConfig = (baseUrl: string) =>
-  request<{ config: Record<string, unknown>; config_path: string }>(baseUrl, "/api/config");
+  request<{ config: Record<string, unknown>; config_path: string }>(
+    baseUrl,
+    "/api/config",
+  );
 
-export const listWorkspaces = (baseUrl: string) =>
-  request<{ workspaces: string[]; root: string }>(baseUrl, "/api/workspaces");
-
-export const createWorkspace = (baseUrl: string, name: string) =>
-  request<{ workspace: string; path: string }>(baseUrl, "/api/workspaces", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-
-export const listSessions = (baseUrl: string) =>
-  request<{ sessions: SessionSummary[] }>(baseUrl, "/api/sessions");
+export const listSessions = (baseUrl: string, allUsers = false) =>
+  request<{ sessions: SessionSummary[] }>(
+    baseUrl,
+    `/api/sessions?all_users=${allUsers}`,
+  );
 
 export const getSessionEvents = (baseUrl: string, sessionId: string) =>
   request<{ session_id: string; events: HarnessEvent[] }>(
@@ -83,22 +90,23 @@ export const startHarness = (
   baseUrl: string,
   payload: {
     session_id: string;
+    request_id: string;
     goal: string;
     max_turns?: number | null;
     primary_model?: string | null;
     reviewer_model?: string | null;
-    workspace_path?: string | null;
   },
 ) =>
-  request<{ message: string; session_id: string; workspace: string; event_offset: number }>(
-    baseUrl,
-    "/api/harness/start",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-  );
+  request<{
+    message: string;
+    session_id: string;
+    workspace: string;
+    event_offset: number;
+  }>(baseUrl, "/api/harness/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 
 export const stopHarness = (baseUrl: string, sessionId: string) =>
   request<{ message: string; session_id: string; status: string }>(
@@ -116,23 +124,39 @@ export const listWorkspaceFiles = (baseUrl: string, sessionId: string) =>
     `/api/harness/list/${sessionId}`,
   );
 
-export const readWorkspaceFile = (baseUrl: string, sessionId: string, path: string) =>
+export const readWorkspaceFile = (
+  baseUrl: string,
+  sessionId: string,
+  path: string,
+) =>
   request<{ path: string; content: string }>(
     baseUrl,
     `/api/harness/read/${sessionId}?path=${encodeURIComponent(path)}`,
   );
 
 export const listApprovals = (baseUrl: string, sessionId: string) =>
-  request<{ approvals: ApprovalItem[] }>(baseUrl, `/api/harness/approvals/${sessionId}`);
+  request<{ approvals: ApprovalItem[] }>(
+    baseUrl,
+    `/api/harness/approvals/${sessionId}`,
+  );
 
-export const runCommand = (baseUrl: string, sessionId: string, command: string, args = "") =>
+export const runCommand = (
+  baseUrl: string,
+  sessionId: string,
+  command: string,
+  args = "",
+) =>
   request<{ output: string }>(baseUrl, "/api/command", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: sessionId || null, command, args }),
   });
 
-export const resolveApproval = (baseUrl: string, approvalId: string, allow: boolean) =>
+export const resolveApproval = (
+  baseUrl: string,
+  approvalId: string,
+  allow: boolean,
+) =>
   request<{ approval_id: string; allowed: boolean }>(
     baseUrl,
     `/api/harness/approve?approval_id=${encodeURIComponent(approvalId)}`,
@@ -152,9 +176,15 @@ export function streamEvents(
   onEvent: (event: HarnessEvent) => void,
   after = 0,
 ): () => void {
-  const url = buildUrl(baseUrl, `/api/harness/stream/${sessionId}?after=${after}`);
+  const url = buildUrl(
+    baseUrl,
+    `/api/harness/stream/${sessionId}?after=${after}`,
+  );
   const es = new EventSource(url);
 
+  es.onerror = () => {
+    void apiRequest("/api/auth/me").catch(() => es.close());
+  };
   es.onmessage = (msg) => {
     try {
       const data = JSON.parse(msg.data);
@@ -168,5 +198,8 @@ export function streamEvents(
 }
 
 export const deleteSession = (baseUrl: string, sessionId: string) =>
-  request<{ message: string; session_id: string }>(baseUrl,
-    `/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  request<{ message: string; session_id: string }>(
+    baseUrl,
+    `/api/sessions/${encodeURIComponent(sessionId)}`,
+    { method: "DELETE" },
+  );

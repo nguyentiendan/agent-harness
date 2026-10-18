@@ -3,6 +3,23 @@
 > Tổng hợp toàn bộ quá trình refactor từ đầu session.
 > Snapshot tại thời điểm viết; cập nhật khi có thay đổi.
 
+## Cập nhật 2026-10-18 — Mốc 1 hoàn tất, chờ anh test frontend
+
+- **Auth + Admin/User:** login/logout bằng cookie HttpOnly + CSRF/Origin; mật khẩu Argon2id; hết hạn phiên 12h; tạo user với password tạm bắt đổi; đổi/reset password, enable/disable và đổi role. Không cho khóa/hạ quyền Admin hoạt động cuối cùng.
+- **Ownership:** User chỉ list/read/stop/delete chat của mình; Admin có All users’ chats, owner rõ ràng và audit khi quản trị. Admin không gửi message dưới danh tính người khác. Kiểm tra quyền cả SSE, commands, approvals và Files.
+- **DB:** PostgreSQL `platform-db` / volume `platform_db` riêng; Alembic tạo schema. Chat, runs, events, users, login sessions, audit và throttle lưu DB. Không còn JSON persistence ở public API. Gửi nhiều message giữ cùng chat/title; request ID chống gửi lặp; SSE có cursor và kiểm tra revoke khi stream đang mở.
+- **API/module:** `backend/app/platform/{db,identity,auth,chat,routes}.py`; CLI bootstrap Admin và cleanup riêng. Legacy agent/services/tools vẫn giữ để tích hợp sandbox, nhưng không được mount thành HTTP API. Một backend worker, admission tuần tự trong process; không hỗ trợ scale worker/replica.
+- **UI:** login, bắt đổi password, menu account/logout/password, Manage users (create/role/disable/reset), My chats/All users’ chats. Bỏ workspace assignment và API base URL tùy chỉnh; Settings lấy model được server bật. Giữ sidebar rail, dark/light, modal. Anh sẽ test tương tác frontend như đã thống nhất.
+- **Giới hạn mốc 1:** text chat qua LiteLLM hiện hữu; shell/files/MCP/subagent/tools bị khóa đến mốc sandbox. Project UI/schema và user-specific LiteLLM quota/key ở mốc sau. Metrics agent/tool cũ không áp dụng cho text-only run mới.
+- **Dữ liệu:** đã xóa dữ liệu test cũ trong `data/` và `workspace_data/` theo chỉ dẫn của anh, không backup/import/migration dữ liệu. Không đụng volume/database LiteLLM. Task import legacy trong plan đã superseded; Alembic vẫn quản lý schema mới.
+- **Kiểm chứng:** **35 backend unittest đạt trên local Python 3.14 và Docker Python 3.12 + PostgreSQL test riêng**, gồm isolation A/B/Admin, CSRF/logout/expiry/reset/disable, last Admin, session continuity/idempotency, start/revoke race, Admin queued revoke, SSE cursor/revoke, restart và trash retention. Alembic upgrade chạy lặp đạt. Fake model trong tests; chưa kiểm chứng provider thật lần này.
+- **Build/deploy:** frontend production build (local Webpack + Docker Turbopack) và TypeScript đạt; backend/frontend đã chạy bản mới. Smoke test qua nginx: frontend 200, anonymous API 401, login/me 200, password-tạm restriction 403, logout thu hồi thành công. Backend debug port chỉ bind localhost, IP login throttle ở nginx; account throttle ở backend.
+- **Review:** đã xử lý race start/delete và disable/start, cached Admin chờ lock, stale auth polling và retry ID của frontend. Lỗi validation không echo password. Secret Admin tạm nằm `.env.admin` (gitignored, mode 0600), không trong Git/tài liệu.
+- **Bàn giao:** [runbook và checklist frontend](runbooks/auth-milestone-1.md). Chat delete vào trash 7 ngày; cleanup chạy startup hoặc `python -m app.cli.cleanup` (schedule hằng ngày khi vận hành).
+- **Bước kế tiếp:** anh test frontend mốc 1; sửa feedback trước mốc 2 Docker sandbox. Không mở file/code execution nhiều user trước isolation tests.
+
+---
+
 ## Cập nhật 2026-10-17 — Spec và plan AI Platform (chưa triển khai)
 
 - Đã thống nhất bỏ workspace assignment: user tự tạo chat hoặc project cá nhân; hai role **Admin/User**, User chỉ thấy dữ liệu của mình, Admin quản trị/xem tất cả.
@@ -62,7 +79,7 @@
 - Đã build và triển khai backend/frontend. HTTP frontend/API 200, DELETE route và SSE cursor đúng; 5 session hiện có được giữ nguyên. Chưa kiểm tra tương tác browser do thiếu quyền Computer Use.
 
 ### Giới hạn còn lại và bước kế tiếp
-- Auth, Admin/User và cách ly file theo User chưa triển khai; đây là bước tiếp theo.
+- Cập nhật 2026-10-18: Auth/Admin/User và ownership chat đã có; file execution tắt, cách ly sandbox là bước tiếp theo.
 - State của active runs/approvals vẫn trong RAM một process, chưa hỗ trợ nhiều worker hoặc khôi phục một run đang chạy sau restart.
 - Dữ liệu session vẫn lưu JSON; mỗi lượt kế tiếp nhận lịch sử user/assistant, không khôi phục toàn bộ tool transcript cho model.
 - Các kiểm thử sử dụng fake LLM/MCP, chưa xác minh gọi provider hoặc MCP server thật trong lần refactor này.
@@ -73,7 +90,7 @@ cd backend
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-## Tổng quan nhanh (đã xong)
+## Tổng quan harness legacy (các capability bên dưới chưa bật lại trong API text-only mốc 1)
 
 - **Frontend**: Next.js 16.3.3 chat UI (Enter-to-send, settings modal, sidebar workspace + sessions, Files, approval Allow/Deny) + Nginx.
 - **Backend**: FastAPI + agent loop thật (`AgentSession`) + `ToolRegistry` + `PermissionManager` (3 gates) + `HookSystem` + `GoalController`/`PromptGoalEvaluator` (goal loop) + context compaction.
@@ -121,8 +138,8 @@ cd backend
 
 | # | Mục | Ghi chú |
 |---|---|---|
-| 1 | Auth / đăng nhập | Chưa có user, login, session |
-| 2 | Chat/project cá nhân và ownership | Đã có spec/plan; chưa triển khai, bỏ workspace assignment |
+| 1 | Auth / đăng nhập | ✅ Mốc 1 hoàn tất 2026-10-18; chờ frontend acceptance |
+| 2 | Chat/project cá nhân và ownership | ✅ Chat ownership; project và sandbox chưa triển khai |
 | 3 | Team thật (bậc 1) | Chưa có `Team`/`Teammate` định danh (role+model+prompt), chưa isolate worktree, chưa UI |
 | 4 | Team bậc 2 (mailbox + typed protocols) | Chưa có giao tiếp giữa teammate |
 | 5 | Sandbox thật (OS-level) | bash mới bị siết bằng policy, chưa cách ly container/network/resource |
@@ -143,7 +160,7 @@ cd backend
 
 ## 2. Chức năng CẦN LÀM (ưu tiên)
 
-1. **Auth + RBAC** — Admin/User, login/logout, ownership chat/project và migration DB theo spec/plan mới.
+1. **Auth + RBAC acceptance** — backend hoàn tất, anh test frontend; không migrate dữ liệu test cũ.
 2. **Docker sandbox** — container theo run, file bền vững theo chat/project; cách ly tool execution, kiểm chứng network/CPU/RAM/PID/disk trước rollout.
 3. **Project cá nhân + định mức** — hoàn thiện UI/file lifecycle và LiteLLM usage/budget theo user trước khi phát triển Team.
 4. **Browser tool** — cắm MCP browser (Playwright/Browser-Use) vào tool pool.
@@ -160,9 +177,9 @@ cd backend
 
 | Mức độ | Lỗ hổng |
 |---|---|
-| 🔴 Nghiêm trọng | **Không có auth** — start run / đọc-ghi workspace / approve / stop không cần xác thực; CORS `*` |
-| 🔴 Nghiêm trọng | **Không tách theo user** — user A đọc được file/session/event của user B |
-| 🟠 Cao | **Bash vẫn thoát được** bằng cách lách pattern (vd `python -c "…chr(47)…"`) — static guard, không phải sandbox thật |
+| ✅ Đã xử lý mốc 1 | API bắt buộc auth/ownership, bỏ CORS wildcard và legacy routes |
+| ✅ Đã xử lý mốc 1 | Chat/event theo owner; file/tools khóa đến mốc sandbox |
+| 🟠 Cần trước mốc sandbox | Legacy bash guard không phải cách ly OS; public API mốc 1 không chạy bash |
 | 🟠 Cao | **Không giới hạn tài nguyên** — không CPU/mem/pids/disk limit |
 | 🟠 Cao | **Không kiểm soát network egress** — agent có thể exfiltrate dữ liệu |
 | 🟡 Trung bình | **Master key LiteLLM nằm trong env backend** (fallback) |
@@ -222,7 +239,7 @@ Lịch sử user/assistant của các lượt trước được nạp vào run t
 ---
 ## Roadmap đề xuất
 
-1. Auth + RBAC, DB/ownership và migration (spec/plan 2026-10-17)
+1. ✅ Auth + RBAC, DB/chat ownership; chờ user frontend test (bỏ migration dữ liệu test)
 2. Docker sandbox và file isolation
 3. Project cá nhân, định mức AI/tài nguyên và pilot
 4. Team bậc 1 (sau mốc platform; chưa thuộc v1)

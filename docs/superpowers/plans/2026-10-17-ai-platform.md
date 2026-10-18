@@ -10,7 +10,24 @@
 
 **Spec:** [2026-10-17-ai-platform-design.md](../specs/2026-10-17-ai-platform-design.md)
 
-**Status:** Kế hoạch để review, chưa thực hiện. User đã yêu cầu viết cả spec và plan trong lượt này; không coi đó là phê duyệt các mặc định kỹ thuật chưa thảo luận hoặc yêu cầu deploy.
+**Status:** User yêu cầu thực hiện mốc A ngày 2026-10-18. Task 2 import legacy được hủy theo chỉ dẫn: reset dữ liệu test, không backup/migration dữ liệu; schema Alembic vẫn thực hiện. User đã yêu cầu viết cả spec và plan trong lượt này; không coi đó là phê duyệt các mặc định kỹ thuật chưa thảo luận hoặc yêu cầu deploy.
+
+## Execution record — 2026-10-18
+
+Mốc A đã triển khai trên branch `feat/auth-ownership`; frontend tương tác do anh test, backend 35 tests đạt cả local và Docker/PostgreSQL.
+
+| Task | Kết quả thực tế |
+|---|---|
+| 1 | Hoàn tất DB/schema/bootstrap; tables project/scope/usage chưa cần được chuyển sang các mốc B–D. |
+| 2 | Import bị hủy theo yêu cầu user; đã reset chỉ dữ liệu test harness. Session repository DB nằm trong platform chat/routes. |
+| 3 | Hoàn tất auth, admin user management, cookie/CSRF, audit, throttle và revoke. |
+| 4 | Hoàn tất ownership mọi API, idempotency, SSE; single-worker admission lock + persisted run state thay distributed lease. Không bật tools. |
+| 5 | Code/UI và production build hoàn tất; browser acceptance chờ user theo yêu cầu mới. |
+| 6–11 | Chưa thực hiện. |
+
+Ruling: gom public platform boundary vào các module nhỏ `backend/app/platform/` thay vì sửa trực tiếp legacy harness services; legacy không expose HTTP. Tránh vô tình chạy công cụ chưa sandbox. Không worktree riêng: branch mới trong checkout chung để anh test Docker/IDE tại đường dẫn quen thuộc. CLI/schema migrations vẫn có; data import/backup không có. Tài liệu triển khai cụ thể: [runbook](../../runbooks/auth-milestone-1.md).
+
+Checklist thiết kế gốc bên dưới được giữ để đối chiếu; execution record này ghi các điều chỉnh đã thực hiện. Không dùng những bước migration/browser automation cũ để yêu cầu lại phần user đã bỏ hoặc nhận test.
 
 ## Global constraints
 
@@ -62,7 +79,7 @@ Module mới ở bảng là đường dẫn dự kiến, chưa tồn tại. Mỗ
 - [ ] Chạy migration upgrade trên DB rỗng và lại lần hai, chạy test đạt; kiểm tra LiteLLM DB không bị thay đổi.
 - [ ] Update STATUS và commit `feat: add platform database and admin bootstrap`.
 
-### Task 2: Import legacy và repository session
+### Task 2: Import legacy và repository session — SUPERSEDED 2026-10-18
 
 **Files:** tạo `cli/import_legacy.py`; sửa `storage/sessions.py`, `services/sessions.py`; test `tests/test_legacy_import.py`.
 

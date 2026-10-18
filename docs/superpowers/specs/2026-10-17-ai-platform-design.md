@@ -1,6 +1,8 @@
 # AI Platform nội bộ — Auth, chat/project và Docker sandbox
 
-Ngày: 2026-10-17. Trạng thái: **bản thiết kế để review; chưa triển khai**.
+Ngày: 2026-10-17. Cập nhật 2026-10-18: **user đã duyệt hướng thiết kế và yêu cầu triển khai mốc 1**.
+
+**Điều chỉnh được user chỉ định:** dữ liệu hiện tại chỉ là test; bỏ backup/import/migration dữ liệu cũ, reset dữ liệu harness. Giữ Alembic cho schema DB mới và không đụng DB LiteLLM. §9 bên dưới là thiết kế lịch sử, không thực hiện ở mốc 1. User tự test frontend; agent kiểm thử backend.
 
 ## 1. Mục tiêu và quyết định đã thống nhất
 

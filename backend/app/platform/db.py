@@ -1,0 +1,105 @@
+"""Platform persistence. Production uses PostgreSQL; tests use an isolated database."""
+
+import os
+import time
+from sqlalchemy import (
+    create_engine,
+    String,
+    Boolean,
+    Float,
+    JSON,
+    ForeignKey,
+    Integer,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    username: Mapped[str] = mapped_column(String(80), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(256))
+    role: Mapped[str] = mapped_column(String(10))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[float] = mapped_column(Float, default=time.time)
+
+
+class LoginSession(Base):
+    __tablename__ = "auth_sessions"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    csrf_hash: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[float] = mapped_column(Float)
+
+
+class Chat(Base):
+    __tablename__ = "sessions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    title: Mapped[str] = mapped_column(String(200), default="New chat")
+    status: Mapped[str] = mapped_column(String(20), default="idle")
+    created_at: Mapped[float] = mapped_column(Float, default=time.time)
+    updated_at: Mapped[float] = mapped_column(Float, default=time.time)
+    deleted_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class Run(Base):
+    __tablename__ = "runs"
+    __table_args__ = (UniqueConstraint("session_id", "request_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id"), index=True)
+    request_id: Mapped[str] = mapped_column(String(100))
+    body_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(20), default="running")
+    model: Mapped[str] = mapped_column(String(120))
+    event_offset: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[float] = mapped_column(Float, default=time.time)
+    finished_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class Event(Base):
+    __tablename__ = "events"
+    __table_args__ = (UniqueConstraint("session_id", "sequence"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
+    sequence: Mapped[int] = mapped_column(Integer)
+    payload: Mapped[dict] = mapped_column(JSON)
+
+
+class Audit(Base):
+    __tablename__ = "audit_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    actor_id: Mapped[str] = mapped_column(String(36))
+    action: Mapped[str] = mapped_column(String(80))
+    target_id: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[float] = mapped_column(Float, default=time.time)
+
+
+class LoginAttempt(Base):
+    __tablename__ = "login_attempts"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    reset_at: Mapped[float] = mapped_column(Float)
+
+
+# No production fallback to a local JSON/SQLite file.
+url = os.environ.get("PLATFORM_DATABASE_URL")
+if not url:
+    raise RuntimeError("PLATFORM_DATABASE_URL must be configured")
+engine = create_engine(
+    url,
+    pool_pre_ping=True,
+    **(
+        {"connect_args": {"check_same_thread": False}}
+        if url.startswith("sqlite")
+        else {}
+    ),
+)
+DB = sessionmaker(engine, expire_on_commit=False)

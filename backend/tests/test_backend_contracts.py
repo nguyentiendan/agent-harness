@@ -49,22 +49,22 @@ class BackendContracts(unittest.IsolatedAsyncioTestCase):
         client = TestClient(app)
         spec = client.get('/openapi.json').json()
         expected = {
-            '/api/config': ['get'], '/api/workspaces': ['get', 'post'],
-            '/api/sessions': ['get'], '/api/sessions/{session_id}': ['get', 'delete'],
-            '/api/harness/start': ['post'], '/api/harness/stop/{session_id}': ['post'],
-            '/api/harness/status/{session_id}': ['get'], '/api/harness/files/{session_id}': ['get'],
-            '/api/harness/list/{session_id}': ['get'], '/api/harness/read/{session_id}': ['get'],
-            '/api/harness/approvals/{session_id}': ['get'], '/api/harness/approve': ['post'],
-            '/api/harness/stream/{session_id}': ['get'], '/api/command': ['post'],
+            '/api/config': ['get'], '/api/auth/login': ['post'],
+            '/api/sessions': ['get'], '/api/sessions/{sid}': ['get', 'delete'],
+            '/api/harness/start': ['post'], '/api/harness/stop/{sid}': ['post'],
+            '/api/harness/status/{sid}': ['get'], '/api/harness/files/{sid}': ['get'],
+            '/api/harness/list/{sid}': ['get'], '/api/harness/read/{sid}': ['get'],
+            '/api/harness/approvals/{sid}': ['get'], '/api/harness/approve': ['post'],
+            '/api/harness/stream/{sid}': ['get'], '/api/command': ['post'],
         }
         for path, methods in expected.items():
             for method in methods:
                 self.assertIn(method, spec['paths'][path], path)
-        self.assertEqual(client.post('/api/harness/start', json={}).status_code, 422)
-        self.assertEqual(client.post('/api/workspaces', json={'name': '../outside'}).status_code, 400)
-        self.assertEqual(client.get('/api/sessions').status_code, 200)
-        self.assertIn('/compact', client.post('/api/command', json={'command':'help'}).json()['output'])
-        cursor = spec['paths']['/api/harness/stream/{session_id}']['get']['parameters']
+        self.assertEqual(client.post('/api/harness/start', json={}).status_code, 401)
+        self.assertEqual(client.post('/api/workspaces', json={'name': '../outside'}).status_code, 404)
+        self.assertEqual(client.get('/api/sessions').status_code, 401)
+        self.assertEqual(client.post('/api/command', json={'command':'help'}).status_code, 401)
+        cursor = spec['paths']['/api/harness/stream/{sid}']['get']['parameters']
         self.assertTrue(any(p['name'] == 'after' for p in cursor))
 
     async def test_native_tools_and_path_guards(self):

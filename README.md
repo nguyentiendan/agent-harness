@@ -111,3 +111,10 @@ title and workspace and use previous user/assistant messages as context. SSE's
 `after` cursor skips previously displayed events. Deleting a stopped/completed
 session removes its history, while keeping workspace files. Authentication and
 per-user workspace isolation are not implemented yet.
+
+
+## Auth milestone 1 (2026-10-18)
+
+The web API now requires Admin/User authentication and stores owned chats in a separate PostgreSQL database. Set `PLATFORM_DB_PASSWORD` and `APP_ORIGIN` in `.env` before Compose startup; the backend runs Alembic on startup. Create the first administrator with `docker compose exec backend python -m app.cli.bootstrap_admin admin` (interactive password). No public signup.
+
+The current web release is **text chat only**. Legacy agent tools are retained in source but are not exposed until Docker sandbox isolation is implemented. Workspaces are no longer assigned by administrators. See [setup, testing and operational limits](docs/runbooks/auth-milestone-1.md).

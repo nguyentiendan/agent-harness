@@ -1,4 +1,19 @@
 services:
+  platform-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: platform
+      POSTGRES_PASSWORD: ${PLATFORM_DB_PASSWORD:?Set PLATFORM_DB_PASSWORD in .env}
+      POSTGRES_DB: platform
+    volumes:
+      - platform_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U platform -d platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
@@ -8,14 +23,13 @@ services:
         UID: ${HARNESS_UID:-10001}
         GID: ${HARNESS_GID:-10001}
     container_name: harness-backend
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-proxy-headers"
     ports:
-      - "8000:8000"
-    volumes:
-      - ./workspace_data:/app/workspaces
-      - ./data:/app/data
+      - "127.0.0.1:8000:8000"
     environment:
       # Provider API keys live ONLY in the LiteLLM gateway, not here.
+      - PLATFORM_DATABASE_URL=postgresql+psycopg://platform:${PLATFORM_DB_PASSWORD:?Set PLATFORM_DB_PASSWORD in .env}@platform-db:5432/platform
+      - APP_ORIGIN=${APP_ORIGIN:-http://localhost:3000}
       - HARNESS_CONFIG=config.yaml
       - WORKSPACES_ROOT=/app/workspaces
       - HARNESS_DATA_DIR=/app/data
@@ -24,7 +38,10 @@ services:
       - LITELLM_PROXY_KEY=${LITELLM_VIRTUAL_KEY:-}
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-harness-master}
     depends_on:
-      - litellm
+      platform-db:
+        condition: service_healthy
+      litellm:
+        condition: service_started
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -85,4 +102,5 @@ services:
     restart: unless-stopped
 
 volumes:
+  platform_db:
   litellm_db:

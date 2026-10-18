@@ -2,12 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  createWorkspace,
+  createSession,
   deleteSession,
   getSessionEvents,
   listSessions,
   listWorkspaceFiles,
-  listWorkspaces,
   readWorkspaceFile,
   resolveApproval,
   runCommand,
@@ -23,7 +22,10 @@ import Markdown from "./markdown";
 import ThemeToggle from "./theme-toggle";
 import { Icon, PATHS } from "./components/icons";
 import { ModalShell, SelectField } from "./components/controls";
-import { SettingsModal, FilesModal, CreateWorkspaceModal } from "./components/workspace-modals";
+import { SettingsModal, FilesModal } from "./components/workspace-modals";
+
+import AuthGate from "./components/auth/AuthGate";
+import type { User } from "../lib/auth";
 
 type ChatMessage =
   | { kind: "system"; text: string }
@@ -48,10 +50,10 @@ type ChatMessage =
   | { kind: "status"; status: string; reason?: string };
 
 const SUGGESTIONS = [
-  "Summarize the files in this workspace",
-  "Find and fix the failing tests",
-  "Explain how this codebase is structured",
-  "Review the latest changes for bugs",
+  "Help me brainstorm a marketing plan",
+  "Explain a technical concept simply",
+  "Help me write a professional email",
+  "Review a code snippet I paste here",
 ];
 
 function timeAgo(ts: number): string {
@@ -81,8 +83,10 @@ function lastApprovalIndex(msgs: ChatMessage[]): number {
 
 const STATUS_STYLES: Record<string, string> = {
   idle: "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
-  running: "bg-amber-100 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300",
-  completed: "bg-emerald-100 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300",
+  running:
+    "bg-amber-100 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300",
+  completed:
+    "bg-emerald-100 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300",
   failed: "bg-rose-100 text-rose-700 dark:bg-rose-400/10 dark:text-rose-300",
   stopped: "bg-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400",
 };
@@ -96,23 +100,31 @@ const DOT_STYLES: Record<string, string> = {
 };
 
 export default function Home() {
-  const [apiBaseUrl, setApiBaseUrl] = useState("");
+  return (
+    <AuthGate>{(user) => <ChatHome key={user.id} user={user} />}</AuthGate>
+  );
+}
+
+function ChatHome({ user }: { user: User }) {
+  const apiBaseUrl = "";
+  const [allUsers, setAllUsers] = useState(false);
   const [primaryModel, setPrimaryModel] = useState("");
-  const [reviewerModel, setReviewerModel] = useState("");
-  const [maxTurns, setMaxTurns] = useState("5");
-  const [workspace, setWorkspace] = useState("default");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
-  const returnToSettingsRef = useRef(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const selectedRef = useRef("");
   const sendingRef = useRef(false);
+  const viewEpoch = useRef(0);
+  const pendingSend = useRef<{
+    session: string;
+    text: string;
+    request: string;
+    model: string | null;
+  } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<SessionSummary | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  const [workspaces, setWorkspaces] = useState<string[]>(["default"]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState("");
   const [status, setStatus] = useState<"idle" | HarnessStatus>("idle");
@@ -125,47 +137,48 @@ export default function Home() {
   const [filesError, setFilesError] = useState("");
   const fileRequestRef = useRef(0);
   const [files, setFiles] = useState<WorkspaceFileItem[]>([]);
-  const [fileView, setFileView] = useState<{ path: string; content: string } | null>(null);
+  const [fileView, setFileView] = useState<{
+    path: string;
+    content: string;
+  } | null>(null);
 
   const closeStreamRef = useRef<(() => void) | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const refreshWorkspaces = useCallback(async () => {
-    try {
-      const r = await listWorkspaces(apiBaseUrl);
-      setWorkspaces(r.workspaces);
-    } catch {
-      // backend not ready
-    }
-  }, [apiBaseUrl]);
-
   const refreshSessions = useCallback(async () => {
     try {
-      const r = await listSessions(apiBaseUrl);
+      const r = await listSessions(apiBaseUrl, allUsers);
       setSessions(r.sessions);
     } catch {
       // backend not ready
     }
-  }, [apiBaseUrl]);
+  }, [apiBaseUrl, allUsers]);
 
   const refreshFiles = useCallback(async () => {
     const sid = selectedRef.current;
     setFilesError("");
-    if (!sid) { setFiles([]); setFilesLoading(false); setFilesError("Open or start a session to browse its files."); return; }
+    if (!sid) {
+      setFiles([]);
+      setFilesLoading(false);
+      setFilesError("Open or start a session to browse its files.");
+      return;
+    }
     setFilesLoading(true);
     try {
       const r = await listWorkspaceFiles(apiBaseUrl, sid);
       if (selectedRef.current === sid) setFiles(r.files);
     } catch (e) {
-      if (selectedRef.current === sid) setFilesError(e instanceof Error ? e.message : "Could not load files.");
-    } finally { if (selectedRef.current === sid) setFilesLoading(false); }
+      if (selectedRef.current === sid)
+        setFilesError(e instanceof Error ? e.message : "Could not load files.");
+    } finally {
+      if (selectedRef.current === sid) setFilesLoading(false);
+    }
   }, [apiBaseUrl]);
 
   useEffect(() => {
-    refreshWorkspaces();
     refreshSessions();
-  }, [refreshWorkspaces, refreshSessions]);
+  }, [refreshSessions]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -186,7 +199,10 @@ export default function Home() {
     (ev: HarnessEvent, replay = false) => {
       switch (ev.type) {
         case "user":
-          setMessages((m) => [...m, { kind: "user", text: String(ev.text ?? "") }]);
+          setMessages((m) => [
+            ...m,
+            { kind: "user", text: String(ev.text ?? "") },
+          ]);
           break;
         case "tool_call":
           setMessages((m) => [
@@ -215,7 +231,10 @@ export default function Home() {
           });
           break;
         case "assistant":
-          setMessages((m) => [...m, { kind: "assistant", text: String(ev.text ?? "") }]);
+          setMessages((m) => [
+            ...m,
+            { kind: "assistant", text: String(ev.text ?? "") },
+          ]);
           break;
         case "approval":
           setMessages((m) => [
@@ -245,7 +264,11 @@ export default function Home() {
           if (!replay) setStatus(String(ev.status ?? "idle") as HarnessStatus);
           setMessages((m) => [
             ...m,
-            { kind: "status", status: String(ev.status ?? ""), reason: String(ev.reason ?? "") },
+            {
+              kind: "status",
+              status: String(ev.status ?? ""),
+              reason: String(ev.reason ?? ""),
+            },
           ]);
           if (!replay) {
             closeStreamRef.current?.();
@@ -260,7 +283,14 @@ export default function Home() {
 
   const send = async (override?: string) => {
     const text = (override ?? input).trim();
-    if (!text) return;
+    if (
+      !text ||
+      (currentSessionId &&
+        sessions.some(
+          (s) => s.session_id === currentSessionId && s.owner_id !== user.id,
+        ))
+    )
+      return;
     if (text.startsWith("/")) {
       setInput("");
       await handleCommand(text);
@@ -268,32 +298,59 @@ export default function Home() {
     }
     if (status === "running" || sendingRef.current) return;
     sendingRef.current = true;
-    const id = currentSessionId || `session_${crypto.randomUUID()}`;
+    const epoch = viewEpoch.current;
+    let id = currentSessionId;
     selectedRef.current = id;
     setInput("");
     setCurrentSessionId(id);
     setStatus("running");
     closeStreamRef.current?.();
     try {
+      if (!id) {
+        const created = await createSession();
+        if (epoch !== viewEpoch.current) return;
+        id = created.session_id;
+        selectedRef.current = id;
+        setCurrentSessionId(id);
+      }
+      if (
+        !pendingSend.current ||
+        pendingSend.current.session !== id ||
+        pendingSend.current.text !== text
+      )
+        pendingSend.current = {
+          session: id,
+          text,
+          request: crypto.randomUUID(),
+          model: primaryModel || null,
+        };
       const result = await startHarness(apiBaseUrl, {
         session_id: id,
+        request_id: pendingSend.current.request,
         goal: text,
-        max_turns: maxTurns === "" ? null : Number(maxTurns),
-        primary_model: primaryModel || null,
-        reviewer_model: reviewerModel || null,
-        workspace_path: workspace || null,
+        primary_model: pendingSend.current.model,
       });
+      pendingSend.current = null;
       if (selectedRef.current !== id) return;
-      closeStreamRef.current = streamEvents(apiBaseUrl, id, (ev) => {
-        if (selectedRef.current === id) applyEvent(ev);
-      }, result.event_offset);
+      closeStreamRef.current = streamEvents(
+        apiBaseUrl,
+        id,
+        (ev) => {
+          if (selectedRef.current === id) applyEvent(ev);
+        },
+        result.event_offset,
+      );
     } catch (e) {
       if (selectedRef.current !== id) return;
       setInput(text);
       setStatus("failed");
       setMessages((m) => [
         ...m,
-        { kind: "status", status: "failed", reason: e instanceof Error ? e.message : String(e) },
+        {
+          kind: "status",
+          status: "failed",
+          reason: e instanceof Error ? e.message : String(e),
+        },
       ]);
     } finally {
       sendingRef.current = false;
@@ -302,6 +359,8 @@ export default function Home() {
   };
 
   const newSession = () => {
+    viewEpoch.current++;
+    pendingSend.current = null;
     selectedRef.current = "";
     setFiles([]);
     setFilesLoading(false);
@@ -327,13 +386,16 @@ export default function Home() {
     }
   };
 
-  const pushSystem = (text: string) => setMessages((m) => [...m, { kind: "system", text }]);
+  const pushSystem = (text: string) =>
+    setMessages((m) => [...m, { kind: "system", text }]);
 
   /** Slash commands: some run locally, the rest are handled by the backend. */
   const handleCommand = async (raw: string) => {
     const trimmed = raw.trim();
     const spaceIdx = trimmed.indexOf(" ");
-    const cmd = (spaceIdx === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIdx)).toLowerCase();
+    const cmd = (
+      spaceIdx === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIdx)
+    ).toLowerCase();
     const args = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
 
     switch (cmd) {
@@ -355,7 +417,9 @@ export default function Home() {
         return;
       case "model":
         if (!args) {
-          pushSystem(`Usage: /model <model-name>  (current: ${primaryModel || "config default"})`);
+          pushSystem(
+            `Usage: /model <model-name>  (current: ${primaryModel || "config default"})`,
+          );
           return;
         }
         setPrimaryModel(args);
@@ -366,7 +430,9 @@ export default function Home() {
           const r = await runCommand(apiBaseUrl, currentSessionId, cmd, args);
           pushSystem(r.output);
         } catch (e) {
-          pushSystem(`Command failed: ${e instanceof Error ? e.message : String(e)}`);
+          pushSystem(
+            `Command failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
         }
         return;
     }
@@ -388,6 +454,7 @@ export default function Home() {
   };
 
   const loadSession = async (sid: string) => {
+    viewEpoch.current++;
     selectedRef.current = sid;
     setCurrentSessionId(sid);
     setMessages([]);
@@ -401,26 +468,36 @@ export default function Home() {
     setSidebarOpen(false);
     closeStreamRef.current?.();
     const rec = sessions.find((s) => s.session_id === sid);
-    if (rec) setWorkspace(rec.workspace.split(/[\\/]/).pop() || "default");
     try {
       const r = await getSessionEvents(apiBaseUrl, sid);
       if (selectedRef.current !== sid) return;
-      if (rec && !r.events.some((ev) => ev.type === "user")) setMessages([{ kind: "user", text: rec.goal }]);
+      if (rec && !r.events.some((ev) => ev.type === "user"))
+        setMessages([{ kind: "user", text: rec.goal }]);
       for (const ev of r.events) applyEvent(ev, true);
-      const latest = await listSessions(apiBaseUrl);
+      const latest = await listSessions(apiBaseUrl, allUsers);
       if (selectedRef.current !== sid) return;
       const current = latest.sessions.find((s) => s.session_id === sid);
       setSessions(latest.sessions);
       setStatus((current?.status as HarnessStatus) || "idle");
-      if (current?.status === "running" || (rec?.status === "running" && r.events.at(-1)?.type !== "status")) {
-        closeStreamRef.current = streamEvents(apiBaseUrl, sid, (ev) => {
-          if (selectedRef.current === sid) applyEvent(ev);
-        }, r.events.length);
+      if (
+        current?.status === "running" ||
+        (rec?.status === "running" && r.events.at(-1)?.type !== "status")
+      ) {
+        closeStreamRef.current = streamEvents(
+          apiBaseUrl,
+          sid,
+          (ev) => {
+            if (selectedRef.current === sid) applyEvent(ev);
+          },
+          r.events.length,
+        );
       }
     } catch (e) {
       if (selectedRef.current === sid) {
         setStatus("failed");
-        pushSystem(`Could not load session: ${e instanceof Error ? e.message : String(e)}`);
+        pushSystem(
+          `Could not load session: ${e instanceof Error ? e.message : String(e)}`,
+        );
       }
     }
   };
@@ -432,30 +509,15 @@ export default function Home() {
     try {
       await deleteSession(apiBaseUrl, deleteTarget.session_id);
       if (selectedRef.current === deleteTarget.session_id) newSession();
-      setSessions((items) => items.filter((item) => item.session_id !== deleteTarget.session_id));
+      setSessions((items) =>
+        items.filter((item) => item.session_id !== deleteTarget.session_id),
+      );
       setDeleteTarget(null);
     } catch (e) {
       setDeleteError(e instanceof Error ? e.message : String(e));
-    } finally { setDeleting(false); }
-  };
-
-  const newWorkspace = () => {
-    returnToSettingsRef.current = settingsOpen;
-    setSettingsOpen(false);
-    setCreateWorkspaceOpen(true);
-  };
-
-  const closeCreateWorkspace = () => {
-    setCreateWorkspaceOpen(false);
-    if (returnToSettingsRef.current) setSettingsOpen(true);
-    returnToSettingsRef.current = false;
-  };
-
-  const submitWorkspace = async (name: string) => {
-    await createWorkspace(apiBaseUrl, name);
-    await refreshWorkspaces();
-    newSession();
-    setWorkspace(name);
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const openFile = async (path: string) => {
@@ -465,9 +527,13 @@ export default function Home() {
     setFilesError("");
     try {
       const r = await readWorkspaceFile(apiBaseUrl, sid, path);
-      if (request === fileRequestRef.current && sid === selectedRef.current) setFileView({ path: r.path, content: r.content });
+      if (request === fileRequestRef.current && sid === selectedRef.current)
+        setFileView({ path: r.path, content: r.content });
     } catch (e) {
-      if (request === fileRequestRef.current && sid === selectedRef.current) setFilesError(e instanceof Error ? e.message : "Could not preview file.");
+      if (request === fileRequestRef.current && sid === selectedRef.current)
+        setFilesError(
+          e instanceof Error ? e.message : "Could not preview file.",
+        );
     }
   };
 
@@ -480,10 +546,20 @@ export default function Home() {
 
   const running = status === "running";
 
-  const currentMetrics = sessions.find((s) => s.session_id === currentSessionId)?.metrics;
+  const readOnly =
+    !!currentSessionId &&
+    sessions.some(
+      (s) => s.session_id === currentSessionId && s.owner_id !== user.id,
+    );
+
+  const currentMetrics = sessions.find(
+    (s) => s.session_id === currentSessionId,
+  )?.metrics;
 
   const sidebar = (
-    <div className={`h-full flex-col ${sidebarCollapsed ? "flex md:hidden" : "flex"}`}>
+    <div
+      className={`h-full flex-col ${sidebarCollapsed ? "flex md:hidden" : "flex"}`}
+    >
       <div className="border-b border-zinc-200 p-4 dark:border-zinc-800">
         <div className="mb-4 flex items-center gap-2.5">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-600 text-white dark:bg-teal-500 dark:text-zinc-950">
@@ -493,11 +569,21 @@ export default function Home() {
             <div className="truncate text-[15px] font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
               AI Task Harness
             </div>
-            <div className="text-[11px] text-zinc-500 dark:text-zinc-400">Long-running agent tasks</div>
+            <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
+              Long-running agent tasks
+            </div>
           </div>
-          <button type="button" aria-label="Collapse sidebar" title="Collapse sidebar" aria-expanded={true}
-            onClick={() => { setSidebarCollapsed(true); setSidebarOpen(false); }}
-            className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-200 focus-visible:outline-2 focus-visible:outline-teal-600 dark:hover:bg-zinc-800">
+          <button
+            type="button"
+            aria-label="Collapse sidebar"
+            title="Collapse sidebar"
+            aria-expanded={true}
+            onClick={() => {
+              setSidebarCollapsed(true);
+              setSidebarOpen(false);
+            }}
+            className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-200 focus-visible:outline-2 focus-visible:outline-teal-600 dark:hover:bg-zinc-800"
+          >
             <Icon d="M3 3h18v18H3zM9 3v18m8-14-3 3 3 3" size={18} />
           </button>
         </div>
@@ -506,21 +592,25 @@ export default function Home() {
           onClick={newSession}
           className="mb-3 flex w-full items-center justify-center gap-2 rounded-lg bg-teal-600 px-3 py-2 text-[13px] font-semibold text-white transition-colors hover:bg-teal-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600 dark:bg-teal-500 dark:text-zinc-950 dark:hover:bg-teal-400"
         >
-          <Icon d={PATHS.plus} size={15} /> New session
+          <Icon d={PATHS.plus} size={15} /> New chat
         </button>
-        <label className="mb-1.5 block text-[11px] font-semibold tracking-wide text-zinc-500 uppercase dark:text-zinc-400">
-          Workspace
-        </label>
-        <div className="flex gap-2">
-          <div className="min-w-0 flex-1"><SelectField label="Workspace" value={workspace} options={workspaces.map((value) => ({ value, label: value }))} onChange={(value) => { if (value !== workspace) { newSession(); setWorkspace(value); } }} /></div>
-          <button
-            type="button"
-            onClick={newWorkspace}
-            className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-zinc-200 bg-white px-2.5 py-2 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
-          >
-            <Icon d={PATHS.plus} size={14} /> New
-          </button>
-        </div>
+        {user.role === "admin" && (
+          <SelectField
+            label="Chat visibility"
+            value={allUsers ? "all" : "mine"}
+            options={[
+              { value: "mine", label: "My chats" },
+              { value: "all", label: "All users’ chats" },
+            ]}
+            onChange={(v) => {
+              newSession();
+              setAllUsers(v === "all");
+            }}
+          />
+        )}
+        <p className="mt-2 text-xs text-zinc-500">
+          Private conversations · Projects coming next
+        </p>
       </div>
 
       <div className="flex-1 overflow-y-auto p-2">
@@ -528,34 +618,65 @@ export default function Home() {
           Sessions
         </div>
         {sessions.length === 0 && (
-          <p className="px-2 py-3 text-[13px] text-zinc-400 dark:text-zinc-500">No sessions yet</p>
+          <p className="px-2 py-3 text-[13px] text-zinc-400 dark:text-zinc-500">
+            No chats yet
+          </p>
         )}
         {sessions.map((s) => {
           const active = s.session_id === currentSessionId;
           return (
-            <div key={s.session_id} className="group relative flex items-center">
-            <button
-              type="button"
-              onClick={() => loadSession(s.session_id)}
-              className={`mb-0.5 min-w-0 w-full rounded-lg pl-3 pr-10 py-2.5 text-left transition-colors ${
-                active
-                  ? "bg-white shadow-sm ring-1 ring-zinc-200 dark:bg-zinc-900 dark:ring-zinc-800"
-                  : "hover:bg-zinc-200/60 dark:hover:bg-zinc-900"
-              }`}
+            <div
+              key={s.session_id}
+              className="group relative flex items-center"
             >
-              <div className="truncate text-[13px] font-medium text-zinc-800 dark:text-zinc-100">{s.goal}</div>
-              <div className="mt-1 flex items-center gap-2 text-[11px] text-zinc-500 dark:text-zinc-400">
-                <span className={`h-2 w-2 shrink-0 rounded-full ${DOT_STYLES[s.status] ?? DOT_STYLES.idle} ${s.status === "running" ? "animate-pulse" : ""}`} />
-                <span className="capitalize">{s.status}</span>
-                <span aria-hidden="true">·</span>
-                <span>{timeAgo(s.updated_at)}</span>
-              </div>
-            </button>
-            <button type="button" aria-label={`Delete session: ${s.goal}`} title="Delete session"
-              onClick={() => { setDeleteTarget(s); setDeleteError(""); }}
-              className="absolute right-2 rounded p-1 text-zinc-400 hover:bg-rose-100 hover:text-rose-600 focus-visible:outline-2 dark:hover:bg-rose-950">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M3 6h18M8 6V3h8v3M5 6l1 15h12l1-15M10 10v7M14 10v7" /></svg>
-            </button>
+              <button
+                type="button"
+                onClick={() => loadSession(s.session_id)}
+                className={`mb-0.5 min-w-0 w-full rounded-lg pl-3 pr-10 py-2.5 text-left transition-colors ${
+                  active
+                    ? "bg-white shadow-sm ring-1 ring-zinc-200 dark:bg-zinc-900 dark:ring-zinc-800"
+                    : "hover:bg-zinc-200/60 dark:hover:bg-zinc-900"
+                }`}
+              >
+                <div className="truncate text-[13px] font-medium text-zinc-800 dark:text-zinc-100">
+                  {s.goal}
+                  {allUsers && (
+                    <span className="mt-1 block text-xs font-normal text-teal-600">
+                      {s.owner_username}
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1 flex items-center gap-2 text-[11px] text-zinc-500 dark:text-zinc-400">
+                  <span
+                    className={`h-2 w-2 shrink-0 rounded-full ${DOT_STYLES[s.status] ?? DOT_STYLES.idle} ${s.status === "running" ? "animate-pulse" : ""}`}
+                  />
+                  <span className="capitalize">{s.status}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>{timeAgo(s.updated_at)}</span>
+                </div>
+              </button>
+              <button
+                type="button"
+                aria-label={`Delete session: ${s.goal}`}
+                title="Delete session"
+                onClick={() => {
+                  setDeleteTarget(s);
+                  setDeleteError("");
+                }}
+                className="absolute right-2 rounded p-1 text-zinc-400 hover:bg-rose-100 hover:text-rose-600 focus-visible:outline-2 dark:hover:bg-rose-950"
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  aria-hidden="true"
+                >
+                  <path d="M3 6h18M8 6V3h8v3M5 6l1 15h12l1-15M10 10v7M14 10v7" />
+                </svg>
+              </button>
             </div>
           );
         })}
@@ -586,7 +707,7 @@ export default function Home() {
   );
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-zinc-100 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
+    <div className="flex h-full overflow-hidden bg-zinc-100 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
       {sidebarOpen && (
         <button
           type="button"
@@ -601,17 +722,57 @@ export default function Home() {
         }`}
       >
         {sidebar}
-        {sidebarCollapsed && <nav aria-label="Sidebar shortcuts" className="hidden h-full flex-col items-center gap-2 py-3 md:flex">
-          <button type="button" className="ui-icon-button" title="Expand sidebar" aria-label="Expand sidebar" aria-expanded={false} onClick={() => setSidebarCollapsed(false)}><Icon d="M3 3h18v18H3zM9 3v18m5-14 3 3-3 3" size={19} /></button>
-          <span className="my-1 h-px w-8 bg-zinc-200 dark:bg-zinc-800" />
-          <button type="button" className="ui-icon-button bg-teal-600 text-white hover:bg-teal-700 hover:text-white dark:text-white" title="New session" aria-label="New session" onClick={newSession}><Icon d={PATHS.plus} size={20} /></button>
-          <button type="button" className="ui-icon-button" title="New workspace" aria-label="New workspace" onClick={newWorkspace}><Icon d="M3 7h7l2-3h9v16H3zM12 10v6m-3-3h6" size={19} /></button>
-          <button type="button" className="ui-icon-button" title={`Workspace: ${workspace}`} aria-label="Choose workspace" onClick={() => setSidebarCollapsed(false)}><Icon d={PATHS.folder} size={19} /></button>
-          <div className="flex-1" />
-          <button type="button" className="ui-icon-button" title="Files" aria-label="Files" onClick={() => { setFilesOpen(true); setFileView(null); refreshFiles(); }}><Icon d={PATHS.file} size={19} /></button>
-          <button type="button" className="ui-icon-button" title="Settings" aria-label="Settings" onClick={() => setSettingsOpen(true)}><Icon d={PATHS.gear} size={19} /></button>
-          <ThemeToggle />
-        </nav>}
+        {sidebarCollapsed && (
+          <nav
+            aria-label="Sidebar shortcuts"
+            className="hidden h-full flex-col items-center gap-2 py-3 md:flex"
+          >
+            <button
+              type="button"
+              className="ui-icon-button"
+              title="Expand sidebar"
+              aria-label="Expand sidebar"
+              aria-expanded={false}
+              onClick={() => setSidebarCollapsed(false)}
+            >
+              <Icon d="M3 3h18v18H3zM9 3v18m5-14 3 3-3 3" size={19} />
+            </button>
+            <span className="my-1 h-px w-8 bg-zinc-200 dark:bg-zinc-800" />
+            <button
+              type="button"
+              className="ui-icon-button bg-teal-600 text-white hover:bg-teal-700 hover:text-white dark:text-white"
+              title="New chat"
+              aria-label="New chat"
+              onClick={newSession}
+            >
+              <Icon d={PATHS.plus} size={20} />
+            </button>
+            <div className="flex-1" />
+            <button
+              type="button"
+              className="ui-icon-button"
+              title="Files"
+              aria-label="Files"
+              onClick={() => {
+                setFilesOpen(true);
+                setFileView(null);
+                refreshFiles();
+              }}
+            >
+              <Icon d={PATHS.file} size={19} />
+            </button>
+            <button
+              type="button"
+              className="ui-icon-button"
+              title="Settings"
+              aria-label="Settings"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <Icon d={PATHS.gear} size={19} />
+            </button>
+            <ThemeToggle />
+          </nav>
+        )}
       </aside>
 
       <main className="flex h-full min-w-0 flex-1 flex-col bg-white dark:bg-zinc-950">
@@ -619,21 +780,26 @@ export default function Home() {
           <button
             type="button"
             aria-label="Open sidebar"
-            onClick={() => { setSidebarOpen(true); setSidebarCollapsed(false); }}
+            onClick={() => {
+              setSidebarOpen(true);
+              setSidebarCollapsed(false);
+            }}
             className={`inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 md:hidden dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100`}
           >
             <Icon d={PATHS.menu} size={18} />
           </button>
           <div className="min-w-0 flex-1">
             <div className="truncate text-[14px] font-semibold text-zinc-900 dark:text-zinc-50">
-              {workspace}
-              <span className="font-normal text-zinc-400 dark:text-zinc-500"> workspace</span>
+              {sessions.find((s) => s.session_id === currentSessionId)?.goal ||
+                "New chat"}
             </div>
           </div>
           <span
             className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold capitalize ${STATUS_STYLES[status] ?? STATUS_STYLES.idle}`}
           >
-            <span className={`h-1.5 w-1.5 rounded-full ${DOT_STYLES[status] ?? DOT_STYLES.idle} ${running ? "animate-pulse" : ""}`} />
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${DOT_STYLES[status] ?? DOT_STYLES.idle} ${running ? "animate-pulse" : ""}`}
+            />
             {status}
           </span>
           {running && (
@@ -650,7 +816,10 @@ export default function Home() {
           </div>
         </header>
         {currentMetrics && (
-          <div className="flex flex-wrap gap-x-4 gap-y-1 border-b border-zinc-200 px-5 py-2 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400" aria-label="Run metrics">
+          <div
+            className="flex flex-wrap gap-x-4 gap-y-1 border-b border-zinc-200 px-5 py-2 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400"
+            aria-label="Run metrics"
+          >
             <span>{currentMetrics.duration_seconds ?? 0}s</span>
             <span>{currentMetrics.tool_calls ?? 0} tool calls</span>
             <span>{currentMetrics.turns ?? 0} turns</span>
@@ -669,8 +838,9 @@ export default function Home() {
                   What should the agent do?
                 </h2>
                 <p className="mt-1.5 max-w-md text-[13px] text-zinc-500 dark:text-zinc-400">
-                  Send a goal and the agent will work in the &ldquo;{workspace}&rdquo; workspace,
-                  asking for approval before destructive actions.
+                  Your conversations are private. This release supports text
+                  chat; file tools and code execution will follow with sandbox
+                  support.
                 </p>
                 <div className="mt-6 grid w-full max-w-lg gap-2 sm:grid-cols-2">
                   {SUGGESTIONS.map((s) => (
@@ -691,7 +861,10 @@ export default function Home() {
                   <MessageView key={i} m={m} onRespond={respondApproval} />
                 ))}
                 {running && (
-                  <div className="flex items-center gap-1.5 pl-11" aria-label="Agent is working">
+                  <div
+                    className="flex items-center gap-1.5 pl-11"
+                    aria-label="Agent is working"
+                  >
                     {[0, 1, 2].map((d) => (
                       <span
                         key={d}
@@ -715,14 +888,23 @@ export default function Home() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={onKeyDown}
-                placeholder="Type a message or /help…"
+                disabled={readOnly}
+                placeholder={
+                  readOnly
+                    ? "Viewing another user’s chat — sending is disabled"
+                    : "Type a message or /help…"
+                }
                 rows={1}
                 className="max-h-[180px] min-h-[40px] flex-1 resize-none bg-transparent px-2 py-2 text-[14px] text-zinc-900 placeholder:text-zinc-400 focus:outline-none dark:text-zinc-50 dark:placeholder:text-zinc-500"
               />
               <button
                 type="button"
                 onClick={() => send()}
-                disabled={!input.trim() || (running && !input.trim().startsWith("/"))}
+                disabled={
+                  readOnly ||
+                  !input.trim() ||
+                  (running && !input.trim().startsWith("/"))
+                }
                 aria-label="Send goal"
                 className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-teal-600 text-white transition-colors hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400 dark:bg-teal-500 dark:text-zinc-950 dark:hover:bg-teal-400 dark:disabled:bg-zinc-800 dark:disabled:text-zinc-600"
               >
@@ -737,47 +919,68 @@ export default function Home() {
       </main>
 
       {deleteTarget && (
-        <ModalShell title="Delete session" onClose={() => { if (!deleting) setDeleteTarget(null); }}>
-          <p className="mb-3 text-sm">Delete “{deleteTarget.goal}” and its conversation history? Workspace files will be kept.</p>
-          {deleteError && <p role="alert" className="mb-3 text-sm text-rose-600">{deleteError}</p>}
+        <ModalShell
+          title="Delete session"
+          onClose={() => {
+            if (!deleting) setDeleteTarget(null);
+          }}
+        >
+          <p className="mb-3 text-sm">
+            Delete “{deleteTarget.goal}” and its conversation history? The chat
+            will be hidden immediately and retained for 7 days before cleanup.
+          </p>
+          {deleteError && (
+            <p role="alert" className="mb-3 text-sm text-rose-600">
+              {deleteError}
+            </p>
+          )}
           <div className="flex justify-end gap-3">
-            <button type="button" disabled={deleting} onClick={() => setDeleteTarget(null)} className="rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700">Cancel</button>
-            <button type="button" disabled={deleting || deleteTarget.status === "running"} onClick={confirmDelete} className="rounded-lg bg-rose-600 px-3 py-2 text-sm text-white disabled:opacity-40">{deleting ? "Deleting…" : "Delete session"}</button>
+            <button
+              type="button"
+              disabled={deleting}
+              onClick={() => setDeleteTarget(null)}
+              className="rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={deleting || deleteTarget.status === "running"}
+              onClick={confirmDelete}
+              className="rounded-lg bg-rose-600 px-3 py-2 text-sm text-white disabled:opacity-40"
+            >
+              {deleting ? "Deleting…" : "Delete session"}
+            </button>
           </div>
-          {deleteTarget.status === "running" && <p className="mt-3 text-sm text-amber-600">Stop this session before deleting it.</p>}
+          {deleteTarget.status === "running" && (
+            <p className="mt-3 text-sm text-amber-600">
+              Stop this session before deleting it.
+            </p>
+          )}
         </ModalShell>
       )}
 
-      {createWorkspaceOpen && <CreateWorkspaceModal existing={workspaces} onCreate={submitWorkspace} onClose={closeCreateWorkspace} />}
-
       {settingsOpen && (
         <SettingsModal
-          apiBaseUrl={apiBaseUrl}
-          setApiBaseUrl={setApiBaseUrl}
           primaryModel={primaryModel}
           setPrimaryModel={setPrimaryModel}
-          reviewerModel={reviewerModel}
-          setReviewerModel={setReviewerModel}
-          maxTurns={maxTurns}
-          setMaxTurns={setMaxTurns}
-          workspace={workspace}
-          setWorkspace={(name) => { if (name !== workspace) { newSession(); setWorkspace(name); } }}
-          workspaces={workspaces}
-          onNewWorkspace={newWorkspace}
           onClose={() => setSettingsOpen(false)}
         />
       )}
 
       {filesOpen && (
         <FilesModal
-          workspace={workspace}
+          workspace="this chat"
           loading={filesLoading}
           error={filesError}
           onRefresh={refreshFiles}
           files={files}
           fileView={fileView}
           onOpen={openFile}
-          onBack={() => { fileRequestRef.current++; setFileView(null); }}
+          onBack={() => {
+            fileRequestRef.current++;
+            setFileView(null);
+          }}
           onClose={() => setFilesOpen(false)}
         />
       )}
@@ -808,13 +1011,19 @@ function MessageView({
   onRespond: (id: string, allow: boolean) => void;
 }) {
   if (m.kind === "system") {
-    return <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-900"><Markdown text={m.text} /></div>;
+    return (
+      <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-900">
+        <Markdown text={m.text} />
+      </div>
+    );
   }
   if (m.kind === "user") {
     return (
       <div className="flex animate-message-in justify-end gap-3">
         <div className="max-w-[85%] rounded-2xl rounded-br-md bg-teal-600 px-4 py-2.5 text-white sm:max-w-[75%] dark:bg-teal-500 dark:text-zinc-950">
-          <p className="text-[14px] leading-relaxed break-words whitespace-pre-wrap">{m.text}</p>
+          <p className="text-[14px] leading-relaxed break-words whitespace-pre-wrap">
+            {m.text}
+          </p>
         </div>
         <Avatar label="You" teal />
       </div>
@@ -844,7 +1053,9 @@ function MessageView({
             <div className="min-w-0 flex-1">
               <h4 className="text-[13px] font-semibold text-amber-900 dark:text-amber-200">
                 Approval required: {m.name}
-                {m.reason ? <span className="font-normal"> — {m.reason}</span> : null}
+                {m.reason ? (
+                  <span className="font-normal"> — {m.reason}</span>
+                ) : null}
               </h4>
               <pre className="mt-2 overflow-x-auto rounded-lg bg-white p-2.5 font-mono text-[12px] text-zinc-700 ring-1 ring-amber-200 dark:bg-zinc-950 dark:text-zinc-300 dark:ring-amber-400/20">
                 {JSON.stringify(m.args, null, 2)}
@@ -857,7 +1068,10 @@ function MessageView({
                       : "text-rose-700 dark:text-rose-300"
                   }`}
                 >
-                  <Icon d={m.resolved === "allowed" ? PATHS.check : PATHS.x} size={14} />
+                  <Icon
+                    d={m.resolved === "allowed" ? PATHS.check : PATHS.x}
+                    size={14}
+                  />
                   {m.resolved === "allowed" ? "Allowed" : "Denied"}
                 </p>
               ) : (
@@ -908,7 +1122,9 @@ function ToolView({ m }: { m: Extract<ChatMessage, { kind: "tool" }> }) {
           aria-expanded={open}
           className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
         >
-          <span className="text-[10px] text-zinc-400 dark:text-zinc-500">{open ? "▾" : "▸"}</span>
+          <span className="text-[10px] text-zinc-400 dark:text-zinc-500">
+            {open ? "▾" : "▸"}
+          </span>
           <span className="shrink-0 font-mono text-[12px] font-semibold text-teal-700 dark:text-teal-300">
             {m.name}
           </span>
@@ -916,7 +1132,10 @@ function ToolView({ m }: { m: Extract<ChatMessage, { kind: "tool" }> }) {
             {argsPreview}
           </span>
           {!m.done && (
-            <span className="flex shrink-0 items-center gap-1" aria-label="Running">
+            <span
+              className="flex shrink-0 items-center gap-1"
+              aria-label="Running"
+            >
               {[0, 1, 2].map((d) => (
                 <span
                   key={d}
