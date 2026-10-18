@@ -129,7 +129,7 @@ export const readWorkspaceFile = (
   sessionId: string,
   path: string,
 ) =>
-  request<{ path: string; content: string }>(
+  request<{ path: string; content: string; truncated?: boolean }>(
     baseUrl,
     `/api/harness/read/${sessionId}?path=${encodeURIComponent(path)}`,
   );

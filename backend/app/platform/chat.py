@@ -93,37 +93,65 @@ async def execute(rid):
                 if e["type"] in ("user", "assistant")
             ]
         llm = LiteLLMClientWrapper(default_model=model)
-        response = await asyncio.wait_for(
-            llm.complete(
-                [
+        from app.execution import client, agent, lifecycle
+
+        if client.enabled():
+
+            def emit(event):
+                with DB.begin() as db:
+                    append_event(db, sid, rid, event)
+
+            await asyncio.wait_for(
+                agent.run(llm, rid, history, model, emit), timeout=900
+            )
+        else:
+            response = await asyncio.wait_for(
+                llm.complete(
+                    [
+                        {
+                            "role": "system",
+                            "content": "You are a helpful text-only assistant. You cannot execute tools or access files.",
+                        },
+                        *history,
+                    ],
+                    model=model,
+                ),
+                timeout=900,
+            )
+            with DB.begin() as db:
+                append_event(
+                    db,
+                    sid,
+                    rid,
                     {
-                        "role": "system",
-                        "content": "You are a helpful AI assistant. This release supports text chat only. You cannot read files, execute code, use tools or access a filesystem. Do not claim to have performed those actions.",
+                        "type": "assistant",
+                        "text": response.choices[0].message.content
+                        or "No text response was returned.",
                     },
-                    *history,
-                ],
-                model=model,
-            ),
-            timeout=900,
-        )
-        message = response.choices[0].message
-        text = message.content or "No text response was returned."
-        with DB.begin() as db:
-            r = db.get(Run, rid)
-            if r.status == "running":
-                append_event(db, sid, rid, {"type": "assistant", "text": text})
-        finish(rid, "completed")
+                )
+        status, reason = "completed", ""
     except asyncio.CancelledError:
-        finish(rid, "stopped")
-        raise
-    except Exception:
-        # Provider exceptions can contain request headers or credentials.
-        finish(
-            rid,
-            "failed",
-            "The model request failed. Check gateway availability and model configuration.",
+        status, reason = "stopped", ""
+    except Exception as error:
+        from app.execution.client import RunnerUnavailable
+
+        status = "failed"
+        reason = (
+            str(error)
+            if isinstance(error, RunnerUnavailable)
+            else "The model or sandbox run failed. Check service availability and execution limits."
         )
     finally:
+        from app.execution.lifecycle import settle
+
+        await asyncio.shield(
+            asyncio.to_thread(
+                settle,
+                rid,
+                locals().get("status", "failed"),
+                locals().get("reason", ""),
+            )
+        )
         running.pop(rid, None)
 
 
@@ -169,6 +197,9 @@ async def start(db, c, body):
     )
     db.add(r)
     db.flush()
+    from app.execution.lifecycle import acquire
+
+    acquire(db, r)
     if offset == 0:
         c.title = body.goal[:200]
     c.status = "running"
@@ -187,7 +218,11 @@ async def stop_run(rid):
             await task
         except asyncio.CancelledError:
             pass
-    finish(rid, "stopped")  # covers cancellation before execute entered
+    from app.execution.lifecycle import settle
+
+    await asyncio.to_thread(
+        settle, rid, "stopped"
+    )  # also cancel before coroutine entry
     running.pop(rid, None)
 
 
@@ -208,4 +243,6 @@ def reconcile():
     with DB() as db:
         ids = list(db.scalars(select(Run.id).where(Run.status == "running")))
     for rid in ids:
-        finish(rid, "failed", "Server restarted. Send a new message to continue.")
+        from app.execution.lifecycle import settle
+
+        settle(rid, "failed", "Server restarted. Send a new message to continue.")

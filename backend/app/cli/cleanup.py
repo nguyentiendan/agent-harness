@@ -2,7 +2,16 @@
 
 import time
 from sqlalchemy import select, delete
-from app.platform.db import DB, Chat, Run, Event, LoginSession, LoginAttempt
+from app.platform.db import (
+    DB,
+    Chat,
+    Run,
+    Event,
+    LoginSession,
+    LoginAttempt,
+    ExecutionScope,
+    RunLease,
+)
 
 
 def purge(now=None):
@@ -16,6 +25,21 @@ def purge(now=None):
             )
         )
         if ids:
+            from app.execution import client
+
+            removable = []
+            for sid in ids:
+                if db.get(RunLease, sid):
+                    continue
+                scope = db.get(ExecutionScope, sid)
+                if scope and scope.has_files:
+                    try:
+                        client.RunnerClient().purge(scope.owner_id, sid)
+                    except Exception:
+                        continue
+                removable.append(sid)
+            ids = removable
+            db.execute(delete(ExecutionScope).where(ExecutionScope.id.in_(ids)))
             db.execute(delete(Event).where(Event.session_id.in_(ids)))
             db.execute(delete(Run).where(Run.session_id.in_(ids)))
             db.execute(delete(Chat).where(Chat.id.in_(ids)))

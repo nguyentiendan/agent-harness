@@ -130,26 +130,30 @@ Module mới ở bảng là đường dẫn dự kiến, chưa tồn tại. Mỗ
 
 ### Task 6: Runner và file gateway
 
+**Kết quả 2026-10-18:** hoàn tất pilot offline; xem `docs/runbooks/sandbox-milestone-2.md`. Dùng named volume riêng theo chat; image tag resolve sang immutable ID khi cấp container. Hard disk quota chưa đạt, giữ rollout gate. Tests thực tế ở `sandbox_runner/tests/{test_files,test_runtime,test_docker}.py` và `backend/tests/test_execution.py`.
+
 **Files:** tạo execution types/client, runner package và sandbox image theo bảng; sửa Compose/config; tests `backend/tests/test_runner_client.py`, `sandbox_runner/tests/test_runner.py`.
 
 **Interfaces:** `ExecutionContext(owner_id, scope_id, run_id)`; `RunnerClient.ensure(ctx) -> SandboxHandle`, `execute(ctx, command, timeout_seconds) -> ToolResult`, `file_operation(ctx, operation, relative_path, payload) -> FileResult`, `destroy(run_id)`. Internal endpoints `/runs/{id}/ensure`, `/exec`, `/files`, DELETE `/runs/{id}`; service auth bắt buộc, scope mapping từ registry tin cậy, không client host path/image.
 
-- [ ] Test runner rejects unknown run/scope, arbitrary mount/image/options; symlink/traversal/race không đọc file ngoài scope; timeout/OOM/unavailable là lỗi có loại, không fallback.
-- [ ] Chạy unit tests với fake Docker adapter, xác nhận fail rồi implement restricted profiles, mount, secret-free environment, filesystem gateway và safe descriptor-based opens. Backend Files dùng gateway, không raw host read.
-- [ ] Docker integration: A ghi marker, B không đọc được; `/proc`, mount, environment không lộ backend key/socket; shell ghi ngoài mount không sửa host; CPU/RAM/PID constraints inspect đúng; network none không kết nối internal services.
-- [ ] Kiểm tra volume mapping thật giữa Compose/daemon và Docker Desktop; pin sandbox image digest, tài liệu hóa platform support. Hard disk quota chỉ đánh dấu đạt sau host test, chưa có thì pilot-only.
-- [ ] Update STATUS và commit `feat: add restricted Docker sandbox runner`.
+- [x] Test runner rejects unknown run/scope, arbitrary mount/image/options; symlink/traversal/race không đọc file ngoài scope; timeout/OOM/unavailable là lỗi có loại, không fallback.
+- [x] Chạy unit tests với fake Docker adapter, xác nhận fail rồi implement restricted profiles, mount, secret-free environment, filesystem gateway và safe descriptor-based opens. Backend Files dùng gateway, không raw host read.
+- [x] Docker integration: A ghi marker, B không đọc được; `/proc`, mount, environment không lộ backend key/socket; shell ghi ngoài mount không sửa host; CPU/RAM/PID constraints inspect đúng; network none không kết nối internal services.
+- [x] Kiểm tra volume mapping thật giữa Compose/daemon và Docker Desktop; pin sandbox image digest, tài liệu hóa platform support. Hard disk quota chỉ đánh dấu đạt sau host test, chưa có thì pilot-only.
+- [x] Update STATUS và commit `feat: add restricted Docker sandbox runner`.
 
 ### Task 7: Chuyển toàn bộ tool execution và cleanup
+
+**Điều chỉnh đã triển khai:** public API dùng `app/execution/{agent,client,lifecycle}.py` với 5 tool an toàn; các module legacy bên dưới vẫn bị loại khỏi execution path thay vì chuyển toàn bộ capability. Kiểm thử same-project/checkpoint dời sang mốc C vì chưa có project; hiện scope/chat riêng. 40 backend + 3 file + 2 runner unit + 5 Docker tests đạt, thêm smoke SIGKILL backend worker với runner/Postgres thật. Commit gộp task 6–7 vì lifecycle/gateway phụ thuộc chung schema.
 
 **Files:** sửa `agent/{harness,workspace,state}.py`, `tools/{registry,shell,filesystem}.py`, `capabilities/{background,memory,tasks,skills,scheduler,teams,workflow}.py`, `integrations/mcp.py`, `services/{runs,files,approvals}.py`; tạo `execution/lifecycle.py`; tests `tests/test_execution_lifecycle.py`.
 
 **Interfaces:** ToolRegistry nhận `ExecutionContext` + `RunnerClient`; `reconcile_runs() -> ReconcileReport`; state/checkpoint theo run, project file theo scope. MCP/tool chưa có adapter an toàn không được đăng ký.
 
-- [ ] Test `test_no_host_shell_paths`, `test_background_killed_on_stop`, `test_disable_stops_run`, `test_restart_cleans_orphan`, `test_same_project_separate_checkpoints`, `test_plain_chat_no_container`.
-- [ ] Chạy tests thấy fail; implement lazy ensure, cancellation/finally, kill background, idempotent destroy/release; reconcile startup trước nhận run. Audit mọi capability, disable bypass chưa chuyển xong, công bố rõ trong config UI.
-- [ ] Test Docker thật: kill backend giữa run, restart, không process mồ côi; file marker còn; container mất thì run failed, không lặp side effect; approval không mở quyền mount/network.
-- [ ] Regression 21 tests cũ (đã adapt) và tests mới đạt; cập nhật STATUS capability nào disabled, commit `feat: route agent tools through isolated execution`.
+- [x] Test `test_no_host_shell_paths`, `test_background_killed_on_stop`, `test_disable_stops_run`, `test_restart_cleans_orphan`, `test_same_project_separate_checkpoints`, `test_plain_chat_no_container`.
+- [x] Chạy tests thấy fail; implement lazy ensure, cancellation/finally, kill background, idempotent destroy/release; reconcile startup trước nhận run. Audit mọi capability, disable bypass chưa chuyển xong, công bố rõ trong config UI.
+- [x] Test Docker thật: kill backend giữa run, restart, không process mồ côi; file marker còn; container mất thì run failed, không lặp side effect; approval không mở quyền mount/network.
+- [x] Regression 21 tests cũ (đã adapt) và tests mới đạt; cập nhật STATUS capability nào disabled, commit `feat: route agent tools through isolated execution`.
 
 ## Mốc C — Project cá nhân
 

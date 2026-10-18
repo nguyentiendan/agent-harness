@@ -1,4 +1,25 @@
 services:
+  sandbox-image:
+    image: harness-sandbox:local
+    build: ./sandbox
+    profiles: ["build"]
+  sandbox-runner:
+    build: ./sandbox_runner
+    environment:
+      RUNNER_TOKEN: ${RUNNER_TOKEN:?Set RUNNER_TOKEN in .env}
+      SANDBOX_IMAGE: harness-sandbox:local
+      RUNNER_NAMESPACE: harness
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner_state:/state
+    networks: [runner_control]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8080/health',headers={'Authorization':'Bearer '+os.environ['RUNNER_TOKEN']}),timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   platform-db:
     image: postgres:16
     environment:
@@ -22,6 +43,7 @@ services:
         # so the unprivileged container user can write the mounted volumes.
         UID: ${HARNESS_UID:-10001}
         GID: ${HARNESS_GID:-10001}
+    networks: [default, runner_control]
     container_name: harness-backend
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-proxy-headers"
     ports:
@@ -29,6 +51,9 @@ services:
     environment:
       # Provider API keys live ONLY in the LiteLLM gateway, not here.
       - PLATFORM_DATABASE_URL=postgresql+psycopg://platform:${PLATFORM_DB_PASSWORD:?Set PLATFORM_DB_PASSWORD in .env}@platform-db:5432/platform
+      - RUNNER_URL=http://sandbox-runner:8080
+      - RUNNER_TOKEN=${RUNNER_TOKEN:?Set RUNNER_TOKEN in .env}
+      - SANDBOX_ENABLED=true
       - APP_ORIGIN=${APP_ORIGIN:-http://localhost:3000}
       - HARNESS_CONFIG=config.yaml
       - WORKSPACES_ROOT=/app/workspaces
@@ -38,6 +63,8 @@ services:
       - LITELLM_PROXY_KEY=${LITELLM_VIRTUAL_KEY:-}
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-harness-master}
     depends_on:
+      sandbox-runner:
+        condition: service_healthy
       platform-db:
         condition: service_healthy
       litellm:
@@ -101,6 +128,11 @@ services:
       - litellm_db:/var/lib/postgresql/data
     restart: unless-stopped
 
+networks:
+  runner_control:
+    internal: true
+
 volumes:
+  runner_state:
   platform_db:
   litellm_db:

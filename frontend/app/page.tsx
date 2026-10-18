@@ -528,7 +528,7 @@ function ChatHome({ user }: { user: User }) {
     try {
       const r = await readWorkspaceFile(apiBaseUrl, sid, path);
       if (request === fileRequestRef.current && sid === selectedRef.current)
-        setFileView({ path: r.path, content: r.content });
+        setFileView({ path: r.path, content: r.content + (r.truncated ? "\n\n[Preview truncated at 1 MiB]" : "") });
     } catch (e) {
       if (request === fileRequestRef.current && sid === selectedRef.current)
         setFilesError(
@@ -838,9 +838,7 @@ function ChatHome({ user }: { user: User }) {
                   What should the agent do?
                 </h2>
                 <p className="mt-1.5 max-w-md text-[13px] text-zinc-500 dark:text-zinc-400">
-                  Your conversations are private. This release supports text
-                  chat; file tools and code execution will follow with sandbox
-                  support.
+                  Your conversations are private. Ask a question or work with files in your chat’s offline sandbox.
                 </p>
                 <div className="mt-6 grid w-full max-w-lg gap-2 sm:grid-cols-2">
                   {SUGGESTIONS.map((s) => (

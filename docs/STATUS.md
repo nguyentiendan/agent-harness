@@ -3,6 +3,17 @@
 > Tổng hợp toàn bộ quá trình refactor từ đầu session.
 > Snapshot tại thời điểm viết; cập nhật khi có thay đổi.
 
+## Cập nhật 2026-10-18 — Mốc 2: runner/sandbox + file gateway + cleanup
+
+- Anh đã test login/logout/create user mốc 1 và đồng ý triển khai mốc 2. Không reset dữ liệu hiện tại.
+- **Execution:** Docker container riêng theo run, cấp khi tool đầu tiên được gọi; file bền vững theo chat trong volume riêng. Text chat không tạo container. Chỉ bật bash/read/write/edit/list; legacy host tools và MCP/background scheduler/subagent/workflow chưa được đăng ký.
+- **Isolation:** offline, non-root, readonly root, no-new-privileges/drop caps, 1 CPU/1 GiB RAM/128 PIDs, timeout command 120s/run 15 phút. Backend không có socket Docker; runner nội bộ có service token và registry owner/scope bất biến. Gateway readonly kiểm tra traversal/symlink/FIFO; tối đa 2 helper đồng thời.
+- **Cleanup:** lease DB được giữ đến khi runner xác nhận destroy; retry 5s, reconcile startup, runner watchdog/orphan sweep. Stop không tái tạo sandbox do thread ensure trễ. File giữ qua run/restart; trash purge sau 7 ngày chạy mỗi giờ, kể cả khi tool flag đã tắt. Migration chỉ thêm bảng scope/lease.
+- **Kiểm chứng:** 40 backend tests đạt cả local và Docker/PostgreSQL test riêng; 3 gateway tests, 2 runner unit tests, 5 Docker integration tests đạt (cross-user, constraints/network, timeout/background, OOM/container loss, output cap, symlink/FIFO, restart/persistence/purge). Smoke thật SIGKILL backend worker → reconcile → file còn → purge đạt; runner anonymous 401 và arbitrary mount/image 422. Docker SDK có ResourceWarning socket đã đóng trong test; chưa thấy lỗi functional. Frontend/backend/runner production build đạt; đã deploy local, migration `20261018_execution`, backend/runner health đạt, số users/chats trước/sau giữ nguyên. Provider thật và thao tác frontend chờ anh test.
+- **Giới hạn:** pilot-only vì chưa có hard disk quota; low-disk guard không thay thế quota. Offline chưa cài package/tải Internet. Project scope UI/quota ở mốc tiếp theo. [Runbook và checklist frontend](runbooks/sandbox-milestone-2.md).
+
+---
+
 ## Cập nhật 2026-10-18 — Mốc 1 hoàn tất, chờ anh test frontend
 
 - **Auth + Admin/User:** login/logout bằng cookie HttpOnly + CSRF/Origin; mật khẩu Argon2id; hết hạn phiên 12h; tạo user với password tạm bắt đổi; đổi/reset password, enable/disable và đổi role. Không cho khóa/hạ quyền Admin hoạt động cuối cùng.
@@ -239,8 +250,8 @@ Lịch sử user/assistant của các lượt trước được nạp vào run t
 ---
 ## Roadmap đề xuất
 
-1. ✅ Auth + RBAC, DB/chat ownership; chờ user frontend test (bỏ migration dữ liệu test)
-2. Docker sandbox và file isolation
+1. ✅ Auth + RBAC, DB/chat ownership; anh đã test login/logout/create user
+2. ✅ Docker sandbox và file isolation — pilot offline; chờ anh test frontend
 3. Project cá nhân, định mức AI/tài nguyên và pilot
 4. Team bậc 1 (sau mốc platform; chưa thuộc v1)
 5. ~~Browser tool + persist step #~~ ✅ đã xong (browser thật vẫn là tuỳ chọn)

@@ -12,6 +12,7 @@ from .auth import context, Input, COOKIE
 from .db import DB, Chat, Run
 from .identity import owned_chat, authenticate
 from . import chat
+from app.execution import client as execution_client
 
 router = APIRouter()
 
@@ -39,7 +40,7 @@ class Command(Input):
 def config(ctx=Depends(context)):
     return {
         "models": chat.allowed_models(),
-        "tools_enabled": False,
+        "tools_enabled": execution_client.enabled(),
         "projects_enabled": False,
     }
 
@@ -172,15 +173,35 @@ async def stream(
 
 @router.get("/api/harness/list/{sid}")
 @router.get("/api/harness/files/{sid}")
-def files(sid: str, ctx=Depends(context)):
-    owned_chat(ctx[0], ctx[1], sid)
-    return {"session_id": sid, "files": [], "tools_enabled": False}
+async def files(sid: str, ctx=Depends(context)):
+    c = owned_chat(ctx[0], ctx[1], sid)
+    if not execution_client.enabled():
+        return {"session_id": sid, "files": [], "tools_enabled": False}
+    try:
+        result = await asyncio.to_thread(
+            execution_client.RunnerClient().files, c.owner_id, sid, "list_dir"
+        )
+        if "error" in result:
+            raise HTTPException(409, result["error"])
+        return {"session_id": sid, **result}
+    except execution_client.RunnerUnavailable:
+        raise HTTPException(503, "File gateway unavailable.")
 
 
 @router.get("/api/harness/read/{sid}")
-def read_file(sid: str, path: str, ctx=Depends(context)):
-    owned_chat(ctx[0], ctx[1], sid)
-    raise HTTPException(409, "File tools will be available after sandbox setup.")
+async def read_file(sid: str, path: str, ctx=Depends(context)):
+    c = owned_chat(ctx[0], ctx[1], sid)
+    if not execution_client.enabled():
+        raise HTTPException(409, "File tools will be available after sandbox setup.")
+    try:
+        result = await asyncio.to_thread(
+            execution_client.RunnerClient().files, c.owner_id, sid, "read_file", path
+        )
+        if "error" in result:
+            raise HTTPException(409, result["error"])
+        return result
+    except execution_client.RunnerUnavailable:
+        raise HTTPException(503, "File gateway unavailable.")
 
 
 @router.get("/api/harness/approvals/{sid}")
@@ -191,7 +212,7 @@ def approvals(sid: str, ctx=Depends(context)):
 
 @router.post("/api/harness/approve")
 def approve(ctx=Depends(context)):
-    raise HTTPException(404, "Approval not found. Tool execution is disabled.")
+    raise HTTPException(404, "Approval not found.")
 
 
 @router.post("/api/command")
@@ -200,8 +221,8 @@ def command(body: Command, ctx=Depends(context)):
         owned_chat(ctx[0], ctx[1], body.session_id)
     if body.command == "help":
         return {
-            "output": "/new · /stop · /settings · /model · /status. Text chat only; file and execution tools are not enabled yet."
+            "output": "/new · /stop · /settings · /model · /status. Sandbox tools run offline; /workspace files persist within this chat."
         }
     if body.command == "status" and body.session_id:
         return {"output": owned_chat(ctx[0], ctx[1], body.session_id).status}
-    raise HTTPException(409, "This command requires the sandbox milestone.")
+    raise HTTPException(409, "This command is not available in this version.")

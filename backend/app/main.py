@@ -1,5 +1,6 @@
 """Authenticated platform entry point. Legacy service modules are not HTTP routes."""
 
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -13,7 +14,29 @@ async def lifespan(app):
     from app.cli.cleanup import purge
 
     purge()
+    from app.execution.lifecycle import retry_pending
+
+    async def retry_loop():
+        ticks = 0
+        while True:
+            await asyncio.sleep(5)
+            try:
+                await asyncio.to_thread(retry_pending)
+                ticks += 1
+                if ticks >= 720:
+                    await asyncio.to_thread(purge)
+                    ticks = 0
+            except Exception:
+                # Keep the durable leases; retry after temporary DB/runner outage.
+                pass
+
+    cleanup_task = asyncio.create_task(retry_loop())
     yield
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     for rid in list(chat.running):
         await chat.stop_run(rid)
 

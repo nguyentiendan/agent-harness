@@ -11,11 +11,12 @@ export function SettingsModal(props: {
   setPrimaryModel: (v: string) => void;
   onClose: () => void;
 }) {
+  const [toolsEnabled, setToolsEnabled] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [error, setError] = useState("");
   useEffect(() => {
-    apiRequest<{ models: string[] }>("/api/config")
-      .then((r) => setModels(r.models))
+    apiRequest<{ models: string[]; tools_enabled: boolean }>("/api/config")
+      .then((r) => { setModels(r.models); setToolsEnabled(r.tools_enabled); })
       .catch((e) => setError(e.message));
   }, []);
   return (
@@ -45,8 +46,7 @@ export function SettingsModal(props: {
         </p>
       )}
       <p className="mt-4 text-sm text-zinc-500">
-        Text chat is enabled. Code execution and file tools will be available
-        after sandbox setup.
+        {toolsEnabled ? "Code runs in an offline sandbox. Files persist within this chat; internet downloads are unavailable." : "Text chat is enabled. File tools are currently disabled."}
       </p>
     </ModalShell>
   );
@@ -131,7 +131,7 @@ export function FilesModal(props: {
             <div className="px-4 py-12 text-center text-sm text-zinc-500">
               {query
                 ? "No matching files."
-                : "File tools will be available after sandbox setup."}
+                : "No files in this chat yet."}
             </div>
           )}
           {visible.map((file) => (

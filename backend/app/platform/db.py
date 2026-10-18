@@ -89,6 +89,24 @@ class LoginAttempt(Base):
     reset_at: Mapped[float] = mapped_column(Float)
 
 
+class ExecutionScope(Base):
+    __tablename__ = "execution_scopes"
+    id: Mapped[str] = mapped_column(ForeignKey("sessions.id"), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    has_files: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class RunLease(Base):
+    __tablename__ = "run_leases"
+    scope_id: Mapped[str] = mapped_column(
+        ForeignKey("execution_scopes.id"), primary_key=True
+    )
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), unique=True)
+    sandbox_started: Mapped[bool] = mapped_column(Boolean, default=False)
+    terminal_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    terminal_reason: Mapped[str] = mapped_column(String(500), default="")
+
+
 # No production fallback to a local JSON/SQLite file.
 url = os.environ.get("PLATFORM_DATABASE_URL")
 if not url:

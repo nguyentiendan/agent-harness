@@ -16,6 +16,7 @@ if "test" not in os.environ["PLATFORM_DATABASE_URL"].rsplit("/", 1)[-1]:
         "Refusing to run destructive DB tests against a non-test database"
     )
 os.environ["APP_ORIGIN"] = "http://testserver"
+os.environ["SANDBOX_ENABLED"] = "false"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
