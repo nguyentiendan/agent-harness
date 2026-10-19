@@ -3,6 +3,16 @@
 > Tổng hợp toàn bộ quá trình refactor từ đầu session.
 > Snapshot tại thời điểm viết; cập nhật khi có thay đổi.
 
+## Cập nhật 2026-10-20 — Hướng tiếp theo sau mốc 4
+
+**Đề xuất ưu tiên: mốc 5 — nghiệm thu và ổn định pilot.** Bốn mốc nền tảng đã triển khai ở local, nhưng còn chờ anh kiểm tra frontend và chưa đủ điều kiện rollout rộng. Mục tiêu tiếp theo là xác nhận luồng làm việc thực tế, sửa lỗi và làm rõ thông báo định mức trước khi bổ sung subsystem mới.
+
+Thứ tự đề xuất: **5. Nghiệm thu pilot → 6. Sẵn sàng vận hành nội bộ → 7. Chất lượng chat/project → 8. Vibe-code có mạng kiểm soát**. Team, workflow, memory/RAG và MCP nằm trong backlog, chọn theo nhu cầu pilot. Chi tiết và tiêu chí hoàn thành ở [Roadmap sau mốc 4](#roadmap-sau-mốc-4).
+
+Đây là đề xuất thứ tự công việc, chưa phải spec/plan chi tiết hoặc xác nhận các mốc mới đã bắt đầu. Lần cập nhật này chỉ sửa tài liệu; không thay code, cấu hình hay deploy.
+
+---
+
 ## Cập nhật 2026-10-19 — Mốc 4: Limits/usage + LiteLLM identity
 
 - **Chức năng:** budget USD/tháng UTC, model allowlist, concurrent runs 1–4, output cap; Admin **AI limits**, User **My usage**. Chưa gán budget/models thì chặn AI kể cả Admin; không tự cấp ngân sách mặc định.
@@ -271,16 +281,52 @@ Lịch sử user/assistant của các lượt trước được nạp vào run t
 `/compact` chỉ thu gọn tool output/args đã lưu, không tạo bản tóm tắt hội thoại bằng LLM.
 
 ---
-## Roadmap đề xuất
+## Roadmap sau mốc 4
 
-1. ✅ Auth + RBAC, DB/chat ownership; anh đã test login/logout/create user
-2. ✅ Docker sandbox và file isolation — pilot offline; chờ anh test frontend
-3. ✅ Project cá nhân + upload/download + lifecycle — chờ anh test frontend
-4. ✅ Định mức AI/tài nguyên, LiteLLM identity — pilot; chờ anh test frontend, còn release gates host/HTTPS
-4. Team bậc 1 (sau mốc platform; chưa thuộc v1)
-5. ~~Browser tool + persist step #~~ ✅ đã xong (browser thật vẫn là tuỳ chọn)
-6. ~~Observability metrics~~ ✅ đã xong
-7. UI panel (Tasks/Teams/Memory)
-8. Vector memory
-9. Workflow + skill mẫu
-10. Langfuse tracing + mở rộng integration tests
+### Nền tảng hiện có
+
+| Mốc | Trạng thái |
+|---|---|
+| 1. Auth + RBAC + DB/ownership | Đã triển khai; anh đã test login/logout/create user |
+| 2. Docker sandbox + file isolation | Đã triển khai; offline, pilot-only |
+| 3. Project cá nhân + files/lifecycle | Đã triển khai; chờ nghiệm thu frontend |
+| 4. Limits/usage + LiteLLM identity | Đã triển khai và deploy local; chờ nghiệm thu frontend, còn điều kiện vận hành |
+
+### Mốc 5 — Nghiệm thu và ổn định pilot (ưu tiên tiếp theo)
+
+- Anh kiểm tra frontend với Admin và hai User; em kiểm tra backend, tái hiện và sửa feedback. Theo dõi kết quả từng trường hợp, không dùng kết quả build thay cho nghiệm thu thao tác.
+- Kiểm tra xuyên suốt: cấp tài khoản/budget/model → chat nhiều message → tạo project → upload → agent đọc/ghi file → download → xóa và cleanup. Hai User không thấy hoặc tác động file/session của nhau; Admin xem/quản lý đúng quyền.
+- Kiểm tra trải nghiệm khi budget chưa cấp/hết/pending, model bị cấm, Stop, gateway/runner lỗi, logout/disable khi đang chạy và restart. Thông báo cần cho người dùng biết nguyên nhân và bước xử lý; giữ nội dung đang nhập khi yêu cầu chưa được nhận.
+- Đối chiếu usage với LiteLLM qua một số lượt provider thật có giới hạn chi phí được thống nhất trước; bổ sung regression cho lỗi tìm thấy. Các bài mock hiện tại không thay thế nghiệm thu provider thật.
+- **Hoàn thành khi:** checklist frontend/backend có kết quả, các lỗi chặn sử dụng và lỗi quyền/chi phí được xử lý, STATUS ghi rõ phần đạt và giới hạn còn lại. Có thể tiếp tục pilot nhỏ có giám sát.
+
+### Mốc 6 — Sẵn sàng vận hành nội bộ
+
+- Chọn host/VM triển khai, domain nội bộ và cách cấp HTTPS; giữ một backend worker cho đến khi có thiết kế scale riêng. Rà lại ingress, ports, cookie và secrets trên môi trường đích.
+- Triển khai và kiểm chứng **hard disk quota** theo scope/user ở host; test shell ghi đầy quota không làm đầy ổ chung hoặc ảnh hưởng user khác. Không coi low-disk watchdog hiện tại là quota.
+- Backup có lịch cho platform DB, LiteLLM DB, runner registry, scope volumes và encryption secrets; diễn tập restore toàn bộ vào môi trường riêng, kiểm tra owner/file/key/usage. DB restore rehearsal hiện tại chỉ là một phần.
+- Theo dõi disk free, run/container bị kẹt, cleanup lỗi, pending cost và revoke queue; thêm cảnh báo và hướng dẫn xử lý phù hợp quy mô pilot.
+- **Hoàn thành khi:** HTTPS/secret/port checks, quota enforcement, backup/restore toàn trạng thái và cảnh báo được kiểm chứng trên host đích trước khi mở rộng người dùng. Hạng mục phụ thuộc host/domain sẽ được chốt khi lập spec mốc này.
+
+### Mốc 7 — Chất lượng chat và project
+
+- Dùng feedback pilot để chọn tính năng có ích nhất: tìm kiếm/lọc lịch sử, quản lý chat/project thuận tiện hơn, hiển thị tiến trình agent và tệp kết quả dễ hiểu.
+- Cải thiện hội thoại dài: thiết kế quản lý context và tóm tắt có kiểm soát, giữ thông tin quan trọng, tránh mất ngữ cảnh âm thầm. `/compact` hiện chỉ thu gọn tool output, chưa tóm tắt bằng LLM.
+- Nếu thêm streaming câu trả lời, phải giữ đúng Stop/cancel, accounting pending, reconnect và không gửi trùng message. Đây là đề xuất cần thiết kế, chưa coi là có sẵn.
+- **Hoàn thành khi:** các luồng được chọn có tiêu chí nghiệm thu và feedback người dùng; chất lượng sử dụng tốt hơn mà vẫn giữ isolation và budget enforcement.
+
+### Mốc 8 — Vibe-code có mạng kiểm soát (nếu pilot cần)
+
+- Xác định nhu cầu cài npm/pip, truy cập dịch vụ ngoài và preview ứng dụng; thiết kế egress riêng trước khi mở mạng sandbox.
+- Chặn truy cập host/internal services/metadata bằng cơ chế mạng thực sự, giới hạn tài nguyên và truy cập preview theo ownership. Không mở network tự do hoặc mount Docker socket vào sandbox.
+- **Hoàn thành khi:** workflow mẫu chạy được và các bài kiểm tra truy cập trái quyền/mạng nội bộ bị chặn; chỉ mở trong phạm vi đã nghiệm thu.
+
+### Backlog sau đó — chưa chốt thứ tự triển khai
+
+- Tài liệu project/knowledge và RAG nếu cần hỏi đáp tài liệu; thiết kế quyền truy cập và nguồn trích dẫn trước.
+- MCP/connectors với credential và quyền riêng theo user; audit từng tool trước khi bật.
+- Workflow/skill mẫu cho tác vụ lặp lại có nhu cầu thực tế.
+- Team/subagent, lịch chạy nền, memory và UI Tasks/Teams/Memory khi đã có use case rõ; mỗi tác vụ phải giữ identity, scope, quota và lifecycle.
+- Tracing/evaluation nâng cao khi log và metrics cơ bản chưa đủ để đo chất lượng hoặc tìm lỗi.
+
+Các module browser/metrics/teams legacy được nhắc ở phần lịch sử phía trên không đồng nghĩa đã được bật hoặc đạt yêu cầu multi-user trong public platform. Mỗi mốc mới cần chốt phạm vi/spec/plan trước khi triển khai; ưu tiên hiện tại là mốc 5.
