@@ -215,3 +215,10 @@ Mỗi task backend chạy test đích trước, rồi `.venv/bin/python -m unitt
 Đã đối chiếu coverage: auth/policy→1–5; migration→2; sandbox/file security→6–7; projects/lifecycle→8–9; quotas→10; vận hành/release gates→11. Các lựa chọn chưa được user chốt riêng nằm rõ ở spec §2, không giả làm implementation đã hoàn thành.
 
 Bước tiếp theo đề xuất: review spec/plan, xác nhận mặc định username/password; triển khai task 1–5 trước, tiếp đó 6–7 trước khi mở tool execution nhiều user. Thực hiện tuần tự trong session hiện tại phù hợp các interface phụ thuộc nhau; không yêu cầu nhiều agent để bắt đầu.
+
+
+## Cập nhật thực thi mốc 4 — 2026-10-19
+
+Task 10 và phần code Task 11 đã triển khai: `app/billing/`, schema billing, UsagePanel tích hợp Admin limits. 59 backend tests, gateway contract và smoke PostgreSQL đạt; 4 worker/3 runner/6 Docker regression, frontend build, schema upgrade lặp và DB test restore đạt. Review đã sửa pending pagination và fair reconciliation. Xem STATUS/runbook để biết bằng chứng và giới hạn.
+
+Các mục checklist nguyên bản không được coi là hoàn tất toàn bộ: user miễn import legacy; reviewer/subagent public chưa bật nên không tuyên bố đã chạy workload đó; frontend interaction do user test; hard disk quota, HTTPS production và restore volume/host đầy đủ còn là release gates trước rollout rộng. Mốc 4 bàn giao ở mức pilot local, không cutover production công ty.

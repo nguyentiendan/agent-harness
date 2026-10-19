@@ -12,6 +12,8 @@ from sqlalchemy import (
     Integer,
     UniqueConstraint,
     CheckConstraint,
+    Numeric,
+    Text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
@@ -131,6 +133,45 @@ class RunLease(Base):
     sandbox_started: Mapped[bool] = mapped_column(Boolean, default=False)
     terminal_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     terminal_reason: Mapped[str] = mapped_column(String(500), default="")
+
+
+class UserLimit(Base):
+    __tablename__ = "user_limits"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    monthly_budget: Mapped[float | None] = mapped_column(Numeric(18, 10), nullable=True)
+    models: Mapped[list] = mapped_column(JSON, default=list)
+    concurrent_runs: Mapped[int] = mapped_column(Integer, default=1)
+    max_output_tokens: Mapped[int] = mapped_column(Integer, default=4096)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class GatewayKey(Base):
+    __tablename__ = "gateway_keys"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    period: Mapped[str] = mapped_column(String(7))
+    revision: Mapped[int] = mapped_column(Integer)
+    encrypted_key: Mapped[str] = mapped_column(Text)
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    state: Mapped[str] = mapped_column(String(24), default="provisioning")
+    expires_at: Mapped[float] = mapped_column(Float)
+
+
+class UsageRecord(Base):
+    __tablename__ = "usage_records"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    run_id: Mapped[str] = mapped_column(String(36), index=True)
+    period: Mapped[str] = mapped_column(String(7), index=True)
+    model: Mapped[str] = mapped_column(String(120))
+    reserved: Mapped[float] = mapped_column(Numeric(18, 10))
+    cost: Mapped[float | None] = mapped_column(Numeric(18, 10), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    reconciliation_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    gateway_request_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, default=time.time)
 
 
 # No production fallback to a local JSON/SQLite file.

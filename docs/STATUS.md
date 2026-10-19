@@ -3,6 +3,18 @@
 > Tổng hợp toàn bộ quá trình refactor từ đầu session.
 > Snapshot tại thời điểm viết; cập nhật khi có thay đổi.
 
+## Cập nhật 2026-10-19 — Mốc 4: Limits/usage + LiteLLM identity
+
+- **Chức năng:** budget USD/tháng UTC, model allowlist, concurrent runs 1–4, output cap; Admin **AI limits**, User **My usage**. Chưa gán budget/models thì chặn AI kể cả Admin; không tự cấp ngân sách mặc định.
+- **Gateway:** key riêng user/tháng/revision, Fernet encryption server-side; management master không dùng completion, legacy cũng bỏ master fallback. LiteLLM 1.105.1 pin digest, không retry call tự động, tắt prompt logging mới. Rotate/disable queue block key; cấp key mới khi cần.
+- **Accounting:** reserve full model context trước mỗi call, cost chưa biết giữ pending; match spend log theo response ID + user; idempotent. Admin reconciliation có audit, pending phân trang tất cả tháng. Đã sửa hai finding review: pending cũ mất khả năng truy cập và sweep bị starvation sau 100 lượt.
+- **Kiểm chứng:** 59 backend tests local/PostgreSQL, 4 worker + 3 runner + 6 Docker isolation; gateway contract/mock integration, migration schema lặp, DB test dump/restore đạt. Mock cost 0.00001335 USD, overspend 0; test overspend mô phỏng ghi nhận/chặn lượt sau. Frontend Webpack production build/TypeScript đạt. Smoke ban đầu phát hiện request mock bị bỏ qua nên đã chuyển sang model mock endpoint loopback và invalid key; bộ cuối không gọi provider.
+- **Build/deploy:** cả 4 image build đạt, đã deploy Docker local; backend/frontend HTTP 200, anonymous usage/admin API 401. Trước/sau đều 1 user và 1 chat; gateway xác minh được giá/context của 4 model.
+- **Vận hành:** schema `20261019_billing`; không reset dữ liệu/password hoặc import data cũ. Giữ gateway secrets đang dùng. Hướng dẫn [pilot/limits/recovery](runbooks/platform-rollout.md).
+- **Giới hạn:** vẫn **pilot-only**, chưa hard disk quota, HTTPS/domain công ty, full volume/host recovery hoặc kiểm tra browser thao tác; anh test frontend. Chưa mở legacy reviewer/subagent/MCP. Không coi rollout rộng hoàn tất.
+
+---
+
 ## Cập nhật 2026-10-19 — Mốc 3: Project cá nhân + file lifecycle
 
 - **Project:** tạo/đổi tên/instructions/xóa, sidebar Projects và Standalone chats; mỗi project chung scope/file, từng chat giữ lịch sử riêng. Instructions đưa vào prompt từng run như dữ liệu user, không thay policy. Không move chat giữa project.
@@ -264,7 +276,7 @@ Lịch sử user/assistant của các lượt trước được nạp vào run t
 1. ✅ Auth + RBAC, DB/chat ownership; anh đã test login/logout/create user
 2. ✅ Docker sandbox và file isolation — pilot offline; chờ anh test frontend
 3. ✅ Project cá nhân + upload/download + lifecycle — chờ anh test frontend
-4. Tiếp theo: định mức AI/tài nguyên, LiteLLM identity và pilot
+4. ✅ Định mức AI/tài nguyên, LiteLLM identity — pilot; chờ anh test frontend, còn release gates host/HTTPS
 4. Team bậc 1 (sau mốc platform; chưa thuộc v1)
 5. ~~Browser tool + persist step #~~ ✅ đã xong (browser thật vẫn là tuỳ chọn)
 6. ~~Observability metrics~~ ✅ đã xong

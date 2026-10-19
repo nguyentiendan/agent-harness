@@ -4,6 +4,7 @@ workspace:
   default_rules_file: "rules.md"
 
 llm:
+  available_models: [gpt-4o-mini, gpt-4o, deepseek/deepseek-chat, deepseek/deepseek-reasoner]
   # Primary model for the main agent (LiteLLM format).
   primary_model: "gpt-4o-mini"  # or gpt-4o, deepseek/deepseek-chat, ollama/llama3.3
 

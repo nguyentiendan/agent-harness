@@ -9,6 +9,7 @@ import {
   type User,
 } from "../../../lib/auth";
 import { ModalShell } from "../controls";
+import { UsagePanel } from "../admin/UsagePanel";
 import { UsersPanel } from "../admin/UsersPanel";
 
 export default function AuthGate({
@@ -21,6 +22,7 @@ export default function AuthGate({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [usageOpen, setUsageOpen] = useState<"mine" | "admin" | null>(null);
   const [usersOpen, setUsersOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
   useEffect(() => {
@@ -29,6 +31,7 @@ export default function AuthGate({
       if (live) {
         setUser(null);
         setUsersOpen(false);
+      setUsageOpen(null);
         setPasswordOpen(false);
       }
     };
@@ -83,6 +86,7 @@ export default function AuthGate({
       clearAuth();
       setUser(null);
       setUsersOpen(false);
+      setUsageOpen(null);
       setPasswordOpen(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not sign out.");
@@ -168,6 +172,8 @@ export default function AuthGate({
             Manage users
           </button>
         )}
+        {!user.must_change_password && <button className="ui-button" onClick={() => setUsageOpen("mine")}>My usage</button>}
+        {user.role === "admin" && !user.must_change_password && <button className="ui-button" onClick={() => setUsageOpen("admin")}>AI limits</button>}
         <button className="ui-button" onClick={() => setPasswordOpen(true)}>
           Password
         </button>
@@ -190,6 +196,7 @@ export default function AuthGate({
           }}
         />
       )}
+      {usageOpen && !user.must_change_password && <UsagePanel key={usageOpen} user={user} admin={usageOpen === "admin" && user.role === "admin"} onClose={() => setUsageOpen(null)} />}
       {usersOpen && (
         <UsersPanel currentId={user.id} onClose={() => setUsersOpen(false)} />
       )}

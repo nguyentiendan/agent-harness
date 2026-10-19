@@ -60,8 +60,9 @@ services:
       - HARNESS_DATA_DIR=/app/data
       # Route every model call through the gateway (dashboards, keys, budgets).
       - LITELLM_PROXY_URL=${LITELLM_PROXY_URL:-http://litellm:4000}
-      - LITELLM_PROXY_KEY=${LITELLM_VIRTUAL_KEY:-}
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-harness-master}
+      - PLATFORM_LIMITS_ENABLED=true
+      - PLATFORM_KEY_ENCRYPTION_KEY=${PLATFORM_KEY_ENCRYPTION_KEY:?Set PLATFORM_KEY_ENCRYPTION_KEY in .env}
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
     depends_on:
       sandbox-runner:
         condition: service_healthy
@@ -80,7 +81,7 @@ services:
       context: ./frontend
     container_name: harness-frontend
     ports:
-      - "3000:80"
+      - "127.0.0.1:3000:80"
     depends_on:
       - backend
     restart: unless-stopped
@@ -90,16 +91,16 @@ services:
   # spend/token logs. Open http://localhost:4000/ui (admin / LITELLM_MASTER_KEY).
   # ------------------------------------------------------------------
   litellm:
-    image: docker.litellm.ai/berriai/litellm:main-stable
+    image: docker.litellm.ai/berriai/litellm@sha256:b7b9e2c306343721802253d0dd9436b9634a2eb4e14da7c7cf06c5c7b7530802
     container_name: harness-litellm
     ports:
-      - "4000:4000"
+      - "127.0.0.1:4000:4000"
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     environment:
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-harness-master}
-      - LITELLM_SALT_KEY=${LITELLM_SALT_KEY:-sk-harness-salt}
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
+      - LITELLM_SALT_KEY=${LITELLM_SALT_KEY:?Set LITELLM_SALT_KEY in .env}
       - DATABASE_URL=postgresql://litellm:${POSTGRES_PASSWORD:-litellm}@litellm-db:5432/litellm
       - STORE_MODEL_IN_DB=True
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}

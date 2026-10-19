@@ -21,6 +21,7 @@ def allowed_models():
     return list(
         dict.fromkeys(
             [
+                *config.get("available_models", []),
                 config.get("primary_model", "gpt-4o-mini"),
                 config.get("reviewer_model", "gpt-4o-mini"),
             ]
@@ -105,7 +106,7 @@ async def execute(rid):
                     + instructions,
                 },
             )
-        llm = LiteLLMClientWrapper(default_model=model)
+        llm = LiteLLMClientWrapper(default_model=model, user_id=c.owner_id, run_id=rid)
         from app.execution import client, agent, lifecycle
 
         if client.enabled():
@@ -148,11 +149,21 @@ async def execute(rid):
     except Exception as error:
         from app.execution.client import RunnerUnavailable
 
+        from app.billing.gateway import GatewayError
+
         status = "failed"
         reason = (
-            str(error)
-            if isinstance(error, RunnerUnavailable)
-            else "The model or sandbox run failed. Check service availability and execution limits."
+            error.detail
+            if isinstance(error, HTTPException)
+            else (
+                str(error)
+                if isinstance(error, GatewayError)
+                else (
+                    str(error)
+                    if isinstance(error, RunnerUnavailable)
+                    else "The model or sandbox run failed. Check service availability and execution limits."
+                )
+            )
         )
     finally:
         from app.execution.lifecycle import settle
@@ -187,16 +198,25 @@ async def start(db, c, body):
     from app.execution.lifecycle import check_idle, scope_id
 
     check_idle(db, scope_id(c))
+    from app.billing import policy
+
+    limit = (
+        policy.access(db, c.owner_id, body.primary_model)
+        if policy.enabled()
+        else None
+    )
+    if limit and body.reviewer_model:
+        policy.access(db, c.owner_id, body.reviewer_model)
     active = list(db.scalars(select(Run).where(Run.status == "running")))
-    if c.status == "running" or any(
+    if c.status == "running" or sum(
         db.get(Chat, r.session_id).owner_id == c.owner_id for r in active
-    ):
+    ) >= (limit.concurrent_runs if limit else 1):
         raise HTTPException(
             409, "You already have a running chat. Stop it or wait for completion."
         )
     if len(active) >= 4:
         raise HTTPException(429, "The server is busy. Try again shortly.")
-    model = body.primary_model or allowed_models()[0]
+    model = body.primary_model or (limit.models[0] if limit else allowed_models()[0])
     if model not in allowed_models():
         raise HTTPException(422, "Model is not enabled on this server.")
     if body.reviewer_model and body.reviewer_model not in allowed_models():

@@ -118,3 +118,8 @@ per-user workspace isolation are not implemented yet.
 The web API now requires Admin/User authentication and stores owned chats in a separate PostgreSQL database. Set `PLATFORM_DB_PASSWORD` and `APP_ORIGIN` in `.env` before Compose startup; the backend runs Alembic on startup. Create the first administrator with `docker compose exec backend python -m app.cli.bootstrap_admin admin` (interactive password). No public signup.
 
 The current web release is **text chat only**. Legacy agent tools are retained in source but are not exposed until Docker sandbox isolation is implemented. Workspaces are no longer assigned by administrators. See [setup, testing and operational limits](docs/runbooks/auth-milestone-1.md).
+
+
+### Platform limits (milestone 4)
+
+Admin assigns each account a monthly USD budget and allowed models in **AI limits**. Accounts without both cannot call AI. Users see **My usage**; pending costs hold reservations until reconciled. See [pilot deployment and recovery](docs/runbooks/platform-rollout.md). Local Compose binds UI/gateway/debug ports to localhost. This remains pilot-only until host disk quotas and company HTTPS are verified.

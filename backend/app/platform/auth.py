@@ -237,6 +237,10 @@ async def edit_user(
         if body.active is not None:
             user.active = body.active
         revoke(db, uid)
+        if not user.active:
+            from app.billing.gateway import mark_revoke
+
+            mark_revoke(db, uid)
         audit(db, actor, "user.update", uid)
         db.commit()  # revoke before cancelling tasks/streams
         if not user.active:

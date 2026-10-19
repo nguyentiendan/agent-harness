@@ -39,8 +39,16 @@ class Command(Input):
 
 @router.get("/api/config")
 def config(ctx=Depends(context)):
+    from app.billing import policy
+    from .db import UserLimit
+
+    limit = ctx[0].get(UserLimit, ctx[1].id)
+    allowed = chat.allowed_models()
+    if policy.enabled():
+        allowed = [m for m in allowed if limit and m in limit.models]
     return {
-        "models": chat.allowed_models(),
+        "models": allowed,
+        "limits_enabled": policy.enabled(),
         "tools_enabled": execution_client.enabled(),
         "projects_enabled": True,
     }

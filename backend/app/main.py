@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from app.platform import auth, routes, chat, projects, files
+from app.billing import routes as billing_routes
 
 
 @asynccontextmanager
@@ -23,6 +24,10 @@ async def lifespan(app):
             try:
                 await asyncio.to_thread(retry_pending)
                 ticks += 1
+                if ticks % 12 == 0:
+                    from app.billing.reconcile import reconcile
+
+                    await asyncio.to_thread(reconcile)
                 if ticks >= 720:
                     await asyncio.to_thread(purge)
                     ticks = 0
@@ -46,6 +51,7 @@ app.include_router(auth.router)
 app.include_router(routes.router)
 app.include_router(projects.router)
 app.include_router(files.router)
+app.include_router(billing_routes.router)
 
 
 @app.middleware("http")

@@ -17,6 +17,7 @@ if "test" not in os.environ["PLATFORM_DATABASE_URL"].rsplit("/", 1)[-1]:
     )
 os.environ["APP_ORIGIN"] = "http://testserver"
 os.environ["SANDBOX_ENABLED"] = "false"
+os.environ["PLATFORM_LIMITS_ENABLED"] = "false"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
