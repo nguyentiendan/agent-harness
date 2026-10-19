@@ -1,6 +1,7 @@
 """Durable lease: never release ownership until Docker confirms cleanup."""
 
 import threading
+from fastapi import HTTPException
 from sqlalchemy import select
 from app.platform.db import DB, ExecutionScope, RunLease, Run, Chat
 from . import client
@@ -8,16 +9,45 @@ from . import client
 cleanup_lock = threading.RLock()
 
 
-def acquire(db, run):
-    chat = db.get(Chat, run.session_id)
-    scope = db.get(ExecutionScope, chat.id)
+# Single-worker file transfers share admission with runs and deletion.
+transfers = set()
+
+
+def scope_id(chat):
+    return chat.project_id or chat.id
+
+
+def scope_for_chat(db, chat):
+    sid = scope_id(chat)
+    scope = db.get(ExecutionScope, sid)
     if not scope:
-        scope = ExecutionScope(id=chat.id, owner_id=chat.owner_id)
+        scope = ExecutionScope(
+            id=sid,
+            owner_id=chat.owner_id,
+            project_id=chat.project_id,
+            standalone_session_id=None if chat.project_id else chat.id,
+        )
         db.add(scope)
         db.flush()
+    return scope
+
+
+def check_idle(db, sid):
+    if sid in transfers or db.get(RunLease, sid):
+        raise HTTPException(
+            409,
+            "This chat or project is busy. Wait for its run or file transfer to finish.",
+        )
+
+
+def acquire(db, run):
+    chat = db.get(Chat, run.session_id)
+    scope = scope_for_chat(db, chat)
+    if scope.id in transfers:
+        raise HTTPException(409, "A file transfer is in progress. Please retry.")
     lease = db.get(RunLease, scope.id)
     if lease and lease.run_id != run.id:
-        raise RuntimeError("Execution scope is busy.")
+        raise HTTPException(409, "This project already has a running chat.")
     if not lease:
         db.add(RunLease(scope_id=scope.id, run_id=run.id))
         db.flush()

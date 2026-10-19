@@ -9,7 +9,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError, InvalidHashError
 from fastapi import HTTPException
 from sqlalchemy import select, delete
-from .db import User, LoginSession, Chat, Audit
+from .db import User, LoginSession, Chat, Audit, Project
 
 hasher = PasswordHasher()
 DUMMY_HASH = hasher.hash(secrets.token_urlsafe(32))
@@ -90,6 +90,10 @@ def owned_chat(db, actor, sid, action="read"):
     c = db.get(Chat, sid)
     if not c or c.deleted_at or (c.owner_id != actor.id and actor.role != "admin"):
         raise HTTPException(404, "Chat not found.")
+    if c.project_id:
+        project = db.get(Project, c.project_id)
+        if not project or project.deleted_at:
+            raise HTTPException(404, "Chat not found.")
     if c.owner_id != actor.id:
         if action == "continue":
             raise HTTPException(
@@ -97,3 +101,16 @@ def owned_chat(db, actor, sid, action="read"):
             )
         audit(db, actor, "chat." + action, sid)
     return c
+
+
+def owned_project(db, actor, pid, action="read"):
+    p = db.get(Project, pid)
+    if not p or p.deleted_at or (p.owner_id != actor.id and actor.role != "admin"):
+        raise HTTPException(404, "Project not found.")
+    if p.owner_id != actor.id:
+        if action == "continue":
+            raise HTTPException(
+                403, "Administrators cannot create chats as another user."
+            )
+        audit(db, actor, "project." + action, pid)
+    return p

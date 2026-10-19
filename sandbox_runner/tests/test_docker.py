@@ -149,3 +149,41 @@ class DockerIsolationTests(unittest.TestCase):
         self.rt.client.containers.get(self.rt.name(self.run)).remove(force=True)
         with self.assertRaises(RunnerError):
             self.rt.ensure(self.run, self.owner, self.scope)
+
+    def test_binary_upload_download_and_delete(self):
+        from app import transfers
+        from app.runtime import RunnerError
+        import tempfile, hashlib
+
+        self.rt.destroy(self.run)
+        with tempfile.TemporaryFile() as source, tempfile.TemporaryFile() as dest:
+            source.write(b"\x00\xffhello binary")
+            transfers.upload(
+                self.rt, self.owner, self.scope, "nested/report.bin", source
+            )
+            transfers.download(
+                self.rt, self.owner, self.scope, "nested/report.bin", dest
+            )
+            self.assertEqual(dest.read(), b"\x00\xffhello binary")
+            with self.assertRaises(RunnerError):
+                transfers.download(
+                    self.rt, str(uuid.uuid4()), self.scope, "nested/report.bin", dest
+                )
+            with self.assertRaises(RunnerError):
+                transfers.upload(self.rt, self.owner, self.scope, "../escape", source)
+            transfers.delete(self.rt, self.owner, self.scope, "nested/report.bin")
+            with self.assertRaises(RunnerError):
+                transfers.download(
+                    self.rt, self.owner, self.scope, "nested/report.bin", dest
+                )
+            source.seek(0)
+            source.truncate(25 * 1024 * 1024)
+            transfers.upload(self.rt, self.owner, self.scope, "limit.bin", source)
+            dest.seek(0)
+            dest.truncate()
+            transfers.download(self.rt, self.owner, self.scope, "limit.bin", dest)
+            dest.seek(0, 2)
+            self.assertEqual(dest.tell(), 25 * 1024 * 1024)
+            source.truncate(25 * 1024 * 1024 + 1)
+            with self.assertRaises(RunnerError):
+                transfers.upload(self.rt, self.owner, self.scope, "too-big.bin", source)

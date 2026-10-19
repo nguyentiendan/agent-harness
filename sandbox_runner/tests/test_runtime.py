@@ -27,3 +27,25 @@ class RuntimeTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 self.rt.destroy(str(uuid.uuid4()))
         container.remove.assert_called_once_with(force=True)
+
+
+class TransferCancellationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancel_waits_for_copy_before_closing_spool(self):
+        import asyncio, threading
+
+        with patch.dict(os.environ, {"RUNNER_TOKEN": "test-token-" * 8}):
+            from app import main
+        done = threading.Event()
+
+        def worker():
+            import time
+
+            time.sleep(0.04)
+            done.set()
+
+        task = asyncio.create_task(main.run_sync(worker))
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertTrue(done.is_set())

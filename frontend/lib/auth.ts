@@ -21,7 +21,8 @@ export async function apiRequest<T>(
 ): Promise<T> {
   const started = generation;
   const headers = new Headers(init.headers);
-  if (init.body) headers.set("Content-Type", "application/json");
+  if (init.body && !headers.has("Content-Type"))
+    headers.set("Content-Type", "application/json");
   if (init.method && !["GET", "HEAD"].includes(init.method))
     headers.set("X-CSRF-Token", csrf);
   const res = await fetch(path, {

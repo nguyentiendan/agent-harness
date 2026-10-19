@@ -10,7 +10,7 @@ from pydantic import Field
 from sqlalchemy import select
 from .auth import context, Input, COOKIE
 from .db import DB, Chat, Run
-from .identity import owned_chat, authenticate
+from .identity import owned_chat, owned_project, authenticate
 from . import chat
 from app.execution import client as execution_client
 
@@ -18,6 +18,7 @@ router = APIRouter()
 
 
 class NewChat(Input):
+    project_id: str | None = Field(default=None, max_length=36)
     title: str = Field(default="New chat", min_length=1, max_length=200)
 
 
@@ -41,17 +42,33 @@ def config(ctx=Depends(context)):
     return {
         "models": chat.allowed_models(),
         "tools_enabled": execution_client.enabled(),
-        "projects_enabled": False,
+        "projects_enabled": True,
     }
 
 
 @router.post("/api/sessions")
-def create(body: NewChat, ctx=Depends(context)):
-    db, user, _ = ctx
-    c = Chat(id=str(uuid.uuid4()), owner_id=user.id, title=body.title)
-    db.add(c)
-    db.flush()
-    return chat.chat_dto(db, c)
+async def create(body: NewChat, request: Request, ctx=Depends(context)):
+    async with chat.admission:
+        db, _, _ = ctx
+        db.expire_all()
+        user, _ = authenticate(db, request.cookies.get(COOKIE))
+        if user.must_change_password:
+            raise HTTPException(403, "Change your temporary password first.")
+        if body.project_id:
+            owned_project(db, user, body.project_id, "continue")
+        c = Chat(
+            id=str(uuid.uuid4()),
+            owner_id=user.id,
+            title=body.title,
+            project_id=body.project_id,
+        )
+        db.add(c)
+        db.flush()
+        from app.execution.lifecycle import scope_for_chat
+
+        scope_for_chat(db, c)
+        db.commit()
+        return chat.chat_dto(db, c)
 
 
 @router.get("/api/sessions")
@@ -83,6 +100,9 @@ async def delete_chat(sid: str, request: Request, ctx=Depends(context)):
         db.expire_all()
         user, _ = authenticate(db, request.cookies.get(COOKIE))
         c = owned_chat(db, user, sid, "delete")
+        from app.execution.lifecycle import check_idle, scope_id
+
+        check_idle(db, scope_id(c))
         if c.status == "running":
             raise HTTPException(409, "Stop the running chat before deleting it.")
         c.deleted_at = time.time()
@@ -179,7 +199,10 @@ async def files(sid: str, ctx=Depends(context)):
         return {"session_id": sid, "files": [], "tools_enabled": False}
     try:
         result = await asyncio.to_thread(
-            execution_client.RunnerClient().files, c.owner_id, sid, "list_dir"
+            execution_client.RunnerClient().files,
+            c.owner_id,
+            c.project_id or sid,
+            "list_dir",
         )
         if "error" in result:
             raise HTTPException(409, result["error"])
@@ -195,7 +218,11 @@ async def read_file(sid: str, path: str, ctx=Depends(context)):
         raise HTTPException(409, "File tools will be available after sandbox setup.")
     try:
         result = await asyncio.to_thread(
-            execution_client.RunnerClient().files, c.owner_id, sid, "read_file", path
+            execution_client.RunnerClient().files,
+            c.owner_id,
+            c.project_id or sid,
+            "read_file",
+            path,
         )
         if "error" in result:
             raise HTTPException(409, result["error"])

@@ -3,6 +3,17 @@
 > Tổng hợp toàn bộ quá trình refactor từ đầu session.
 > Snapshot tại thời điểm viết; cập nhật khi có thay đổi.
 
+## Cập nhật 2026-10-19 — Mốc 3: Project cá nhân + file lifecycle
+
+- **Project:** tạo/đổi tên/instructions/xóa, sidebar Projects và Standalone chats; mỗi project chung scope/file, từng chat giữ lịch sử riêng. Instructions đưa vào prompt từng run như dữ liệu user, không thay policy. Không move chat giữa project.
+- **Files:** upload/download binary tối đa 25 MiB với streaming và disk spool bounded; preview text 1 MiB, binary attachment; replace/delete có xác nhận. Helper vẫn readonly rootfs; truyền stdin/stdout, không raw host file path hoặc archive extraction. Project có thể upload trước khi tạo chat.
+- **Quyền và lifecycle:** User chỉ dữ liệu của mình, Admin quản lý/xem có audit, không impersonation. Run/transfer/deletion dùng chung scope admission; busy trả 409 và UI giữ draft. Xóa chat project giữ file; project delete trash toàn bộ chat/file 7 ngày. File delete riêng vĩnh viễn có cảnh báo.
+- **DB:** migration `20261019_projects` giữ ID scope/volume hiện hữu và backfill chat chưa có scope. Không reset dữ liệu hoặc password. Test schema PostgreSQL tạm chứng minh upgrade lặp giữ owner/file marker/counts.
+- **Kiểm chứng:** 47 backend tests local/PostgreSQL; 4 worker + 3 runner unit + 6 Docker tests. Smoke HTTP→runner→Docker thật đạt: binary round-trip, project shared files, agent bash thật, history riêng, A/B/Admin, trash purge. Docker exact 25 MiB round-trip và oversized reject đạt. Reviewer phát hiện transaction upload/Admin update đã sửa, regression đạt. Frontend production build + TypeScript đạt; đã deploy local, backend/runner healthy, frontend 200 và anonymous Projects 401. DB revision `20261019_projects`; counts users/chats trước/sau không đổi.
+- **Bàn giao:** anh kiểm tra thao tác frontend/provider thật theo [checklist mốc 3](runbooks/projects-milestone-3.md). Sandbox vẫn offline, pilot-only do chưa có hard disk quota. Mốc tiếp theo là Limits/usage + LiteLLM identity; chưa bật budget enforcement ở mốc 3.
+
+---
+
 ## Cập nhật 2026-10-18 — Mốc 2: runner/sandbox + file gateway + cleanup
 
 - Anh đã test login/logout/create user mốc 1 và đồng ý triển khai mốc 2. Không reset dữ liệu hiện tại.
@@ -252,7 +263,8 @@ Lịch sử user/assistant của các lượt trước được nạp vào run t
 
 1. ✅ Auth + RBAC, DB/chat ownership; anh đã test login/logout/create user
 2. ✅ Docker sandbox và file isolation — pilot offline; chờ anh test frontend
-3. Project cá nhân, định mức AI/tài nguyên và pilot
+3. ✅ Project cá nhân + upload/download + lifecycle — chờ anh test frontend
+4. Tiếp theo: định mức AI/tài nguyên, LiteLLM identity và pilot
 4. Team bậc 1 (sau mốc platform; chưa thuộc v1)
 5. ~~Browser tool + persist step #~~ ✅ đã xong (browser thật vẫn là tuỳ chọn)
 6. ~~Observability metrics~~ ✅ đã xong

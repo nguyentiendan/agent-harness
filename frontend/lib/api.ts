@@ -13,6 +13,7 @@ export interface RunMetrics {
 
 export interface SessionSummary {
   session_id: string;
+  project_id: string | null;
   goal: string;
   status: HarnessStatus | string;
   workspace: string;
@@ -63,8 +64,11 @@ async function request<T>(
 ): Promise<T> {
   return apiRequest<T>(path, init);
 }
-export const createSession = () =>
-  apiRequest<SessionSummary>("/api/sessions", { method: "POST", body: "{}" });
+export const createSession = (project_id: string | null = null) =>
+  apiRequest<SessionSummary>("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ project_id }),
+  });
 
 // Config / workspaces / sessions
 export const fetchConfig = (baseUrl: string) =>

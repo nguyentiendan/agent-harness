@@ -164,13 +164,91 @@ def shell(command, timeout):
     }
 
 
+MAX_TRANSFER = 25 * 1024 * 1024
+
+
+def transfer_file(root, op, path, staging):
+    """Only the trusted gateway invokes these ops in a dedicated helper container."""
+    import uuid
+
+    parent, name = parent_fd(root, path, create=op == "import_file")
+    temporary = ".upload-" + uuid.uuid4().hex
+    try:
+        if op == "import_file":
+            if os.path.getsize(staging) > MAX_TRANSFER:
+                raise ValueError("File exceeds 25 MiB.")
+            # Do not follow or overwrite symlinks, directories, or hard links.
+            try:
+                info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    raise ValueError("Only regular, non-linked files are supported.")
+            except FileNotFoundError:
+                pass
+            fd = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=parent,
+            )
+            with os.fdopen(fd, "wb") as out, open(staging, "rb") as source:
+                count = copy_bounded(source, out)
+                out.flush()
+                os.fsync(out.fileno())
+            os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
+            return {"path": path, "bytes": count}
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        with os.fdopen(fd, "rb") as source:
+            info = os.fstat(source.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError("Only regular, non-linked files are supported.")
+            if op == "delete_file":
+                os.unlink(name, dir_fd=parent)
+                return {"path": path, "deleted": True}
+            if op != "export_file":
+                raise ValueError("Invalid transfer operation.")
+            if info.st_size > MAX_TRANSFER:
+                raise ValueError("File exceeds 25 MiB.")
+            with open(staging, "wb") as out:
+                count = copy_bounded(source, out)
+            return {"path": path, "bytes": count}
+    finally:
+        if op == "import_file":
+            try:
+                os.unlink(temporary, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+        os.close(parent)
+
+
+def copy_bounded(source, out):
+    count = 0
+    while True:
+        chunk = source.read(65536)
+        if not chunk:
+            return count
+        count += len(chunk)
+        if count > MAX_TRANSFER:
+            raise ValueError("File exceeds 25 MiB.")
+        out.write(chunk)
+
+
 if __name__ == "__main__":
     try:
         payload = json.loads(sys.argv[1])
         op = payload.pop("op")
-        result = (
-            shell(**payload) if op == "bash" else file_op("/workspace", op, **payload)
-        )
+        if op in ("import_file", "export_file", "delete_file"):
+            result = transfer_file(
+                "/workspace",
+                op,
+                payload["path"],
+                "/tmp/upload" if op == "import_file" else "/tmp/download",
+            )
+        else:
+            result = (
+                shell(**payload)
+                if op == "bash"
+                else file_op("/workspace", op, **payload)
+            )
         print(json.dumps(result, ensure_ascii=True))
     except (ValueError, OSError, UnicodeError) as exc:
         print(json.dumps({"error": str(exc)[:500]}))

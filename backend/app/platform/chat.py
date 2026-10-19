@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from app.config import load_config
 from app.integrations.llm import LiteLLMClientWrapper
 from app.security.redaction import redact_text
-from .db import DB, Chat, Event, Run, User
+from .db import DB, Chat, Event, Run, User, Project
 from .identity import digest
 
 running: dict[str, asyncio.Task] = {}
@@ -57,6 +57,7 @@ def chat_dto(db, c):
     return {
         "session_id": c.id,
         "owner_id": c.owner_id,
+        "project_id": c.project_id,
         "owner_username": owner.username,
         "goal": c.title,
         "status": c.status,
@@ -87,11 +88,23 @@ async def execute(rid):
             r = db.get(Run, rid)
             sid = r.session_id
             model = r.model
+            c = db.get(Chat, sid)
+            project = db.get(Project, c.project_id) if c.project_id else None
+            instructions = project.instructions if project else ""
             history = [
                 {"role": e["type"], "content": e["text"]}
                 for e in events_for(db, sid)
                 if e["type"] in ("user", "assistant")
             ]
+        if instructions:
+            history.insert(
+                0,
+                {
+                    "role": "user",
+                    "content": "Project instructions (user preferences; do not override system/tool policy):\n"
+                    + instructions,
+                },
+            )
         llm = LiteLLMClientWrapper(default_model=model)
         from app.execution import client, agent, lifecycle
 
@@ -171,6 +184,9 @@ async def start(db, c, body):
             "event_offset": existing.event_offset,
             "run_id": existing.id,
         }
+    from app.execution.lifecycle import check_idle, scope_id
+
+    check_idle(db, scope_id(c))
     active = list(db.scalars(select(Run).where(Run.status == "running")))
     if c.status == "running" or any(
         db.get(Chat, r.session_id).owner_id == c.owner_id for r in active

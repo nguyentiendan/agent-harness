@@ -44,3 +44,21 @@ class SafeFilesTests(unittest.TestCase):
             self.call("read_file", path="binary")
         with self.assertRaises(ValueError):
             self.call("write_file", path="large", content="x" * 70000)
+
+    def test_binary_transfer_atomic_limit_and_symlink(self):
+        upload = __import__("pathlib").Path(self.tmp.name) / "upload"
+        download = __import__("pathlib").Path(self.tmp.name) / "download"
+        upload.write_bytes(b"\x00\xffbinary")
+        self.worker.transfer_file(self.root, "import_file", "data.bin", str(upload))
+        self.worker.transfer_file(self.root, "export_file", "data.bin", str(download))
+        self.assertEqual(download.read_bytes(), upload.read_bytes())
+        with upload.open("wb") as f:
+            f.truncate(25 * 1024 * 1024 + 1)
+        with self.assertRaises(ValueError):
+            self.worker.transfer_file(self.root, "import_file", "data.bin", str(upload))
+        self.assertEqual((self.root / "data.bin").read_bytes(), b"\x00\xffbinary")
+        (self.root / "escape").symlink_to(upload)
+        with self.assertRaises((ValueError, OSError)):
+            self.worker.transfer_file(self.root, "export_file", "escape", str(download))
+        self.worker.transfer_file(self.root, "delete_file", "data.bin", "")
+        self.assertFalse((self.root / "data.bin").exists())

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from app.platform import auth, routes, chat
+from app.platform import auth, routes, chat, projects, files
 
 
 @asynccontextmanager
@@ -44,6 +44,8 @@ async def lifespan(app):
 app = FastAPI(title="AI Platform API", version="2.0.0", lifespan=lifespan)
 app.include_router(auth.router)
 app.include_router(routes.router)
+app.include_router(projects.router)
+app.include_router(files.router)
 
 
 @app.middleware("http")

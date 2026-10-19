@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     UniqueConstraint,
+    CheckConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
@@ -38,10 +39,23 @@ class LoginSession(Base):
     expires_at: Mapped[float] = mapped_column(Float)
 
 
+class Project(Base):
+    __tablename__ = "projects"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    instructions: Mapped[str] = mapped_column(String(16000), default="")
+    created_at: Mapped[float] = mapped_column(Float, default=time.time)
+    deleted_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
 class Chat(Base):
     __tablename__ = "sessions"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id"), nullable=True, index=True
+    )
     title: Mapped[str] = mapped_column(String(200), default="New chat")
     status: Mapped[str] = mapped_column(String(20), default="idle")
     created_at: Mapped[float] = mapped_column(Float, default=time.time)
@@ -91,7 +105,19 @@ class LoginAttempt(Base):
 
 class ExecutionScope(Base):
     __tablename__ = "execution_scopes"
-    id: Mapped[str] = mapped_column(ForeignKey("sessions.id"), primary_key=True)
+    __table_args__ = (
+        CheckConstraint(
+            "(project_id IS NULL) != (standalone_session_id IS NULL)",
+            name="scope_exactly_one_parent",
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id"), nullable=True, unique=True
+    )
+    standalone_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("sessions.id"), nullable=True, unique=True
+    )
     owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     has_files: Mapped[bool] = mapped_column(Boolean, default=False)
 

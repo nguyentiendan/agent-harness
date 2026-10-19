@@ -124,3 +124,97 @@ def purge(body: Scope):
 @app.get("/health")
 def health():
     return {"ready": True}
+
+
+# Reserve before reading request bodies: at most two bounded disk spools.
+import tempfile
+from fastapi import Request
+from fastapi.responses import StreamingResponse
+from . import transfers
+
+transfer_slots = __import__("threading").BoundedSemaphore(2)
+
+
+async def run_sync(call, *args):
+    # A cancelled HTTP request must not close a spool still used by a worker thread.
+    task = asyncio.create_task(asyncio.to_thread(call, *args))
+    cancelled = False
+    while True:
+        try:
+            result = await asyncio.shield(task)
+            break
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            if cancelled:
+                raise asyncio.CancelledError()
+            raise
+    if cancelled:
+        raise asyncio.CancelledError()
+    return result
+
+
+@app.post("/transfer/upload")
+async def upload(request: Request, owner_id: UUID, scope_id: UUID, path: str):
+    if not transfer_slots.acquire(blocking=False):
+        raise HTTPException(503, "File gateway busy.")
+    try:
+        with tempfile.TemporaryFile() as source:
+            count = 0
+            async with asyncio.timeout(120):
+                async for chunk in request.stream():
+                    count += len(chunk)
+                    if count > transfers.LIMIT:
+                        raise HTTPException(413, "File exceeds 25 MiB.")
+                    source.write(chunk)
+                return await run_sync(
+                    safe,
+                    transfers.upload,
+                    runtime,
+                    str(owner_id),
+                    str(scope_id),
+                    path,
+                    source,
+                )
+    finally:
+        transfer_slots.release()
+
+
+@app.get("/transfer/download")
+async def download(owner_id: UUID, scope_id: UUID, path: str):
+    if not transfer_slots.acquire(blocking=False):
+        raise HTTPException(503, "File gateway busy.")
+    output = tempfile.TemporaryFile()
+    try:
+        result = await run_sync(
+            safe,
+            transfers.download,
+            runtime,
+            str(owner_id),
+            str(scope_id),
+            path,
+            output,
+        )
+    except BaseException:
+        output.close()
+        transfer_slots.release()
+        raise
+
+    async def stream():
+        try:
+            while chunk := output.read(65536):
+                yield chunk
+        finally:
+            output.close()
+            transfer_slots.release()
+
+    return StreamingResponse(
+        stream(),
+        media_type="application/octet-stream",
+        headers={"Content-Length": str(result["bytes"])},
+    )
+
+
+@app.delete("/transfer/file")
+def delete_file(owner_id: UUID, scope_id: UUID, path: str):
+    return safe(transfers.delete, runtime, str(owner_id), str(scope_id), path)

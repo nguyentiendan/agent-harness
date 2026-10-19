@@ -159,25 +159,29 @@ Module mới ở bảng là đường dẫn dự kiến, chưa tồn tại. Mỗ
 
 ### Task 8: Project API và file lifecycle
 
+**Kết quả 2026-10-19:** triển khai `platform/projects.py`, `platform/files.py`, migration `20261019_projects`, lifecycle scope và runner transfers. Import fixtures legacy được bỏ theo quyết định reset mốc 1; thay bằng test preservation schema mốc 2 thực tế. 47 backend + 4 worker + 3 runner unit + 6 Docker tests và HTTP/migration smoke đạt. Commit gộp task 8–9 do cùng API/interface.
+
 **Files:** tạo services/routes projects; sửa schemas, scopes, files, sessions; tạo `services/cleanup.py`; tests `tests/test_projects.py`, `test_file_lifecycle.py`.
 
 **Interfaces:** `create_project(principal, name, instructions) -> ProjectRecord`, `update_project(...)`, `trash_project(...)`; REST `/api/projects` GET/POST, `/{id}` PATCH/DELETE. Session create nhận project_id; membership không tồn tại. Files list/read/upload/download/delete theo authorized scope. `purge_expired_trash(now) -> CleanupReport` chạy bằng maintenance CLI định kỳ, idempotent.
 
-- [ ] Test hai chat cùng project thấy cùng file nhưng không trộn history; khác project cùng user không thấy file; ID project của B bị 404; moving existing chat bị reject.
-- [ ] Test delete chat project giữ file, delete standalone/project trash 7 ngày, purge đúng hạn; busy trả 409; upload >25 MiB bị reject trong streaming, preview >1 MiB bị truncate có nhãn, binary không render HTML.
-- [ ] Chạy tests thấy fail; implement API/lifecycle và instructions vào prompt từng run; giữ instructions là user data, không quyền thay auth/tool policy.
-- [ ] Chạy tests đạt và import fixtures từ task 2 hoạt động qua project API; update STATUS, commit `feat: add private projects and persistent file lifecycle`.
+- [x] Test hai chat cùng project thấy cùng file nhưng không trộn history; khác project cùng user không thấy file; ID project của B bị 404; moving existing chat bị reject.
+- [x] Test delete chat project giữ file, delete standalone/project trash 7 ngày, purge đúng hạn; busy trả 409; upload >25 MiB bị reject trong streaming, preview >1 MiB bị truncate có nhãn, binary không render HTML.
+- [x] Chạy tests thấy fail; implement API/lifecycle và instructions vào prompt từng run; giữ instructions là user data, không quyền thay auth/tool policy.
+- [x] Chạy tests đạt và import fixtures từ task 2 hoạt động qua project API; update STATUS, commit `feat: add private projects and persistent file lifecycle`.
 
 ### Task 9: Project/file UI
+
+**Kết quả 2026-10-19:** sidebar + ProjectDialog/ProjectList/FileManager, binary upload/download/delete, project instructions và owner UI; production build/TypeScript đạt. Frontend browser cases bên dưới **bàn giao user test** theo chỉ dẫn trong session; không tuyên bố đã chạy browser automation. Busy/history/ownership/multi-chat kiểm chứng bằng backend và Docker smoke. Checklist: `docs/runbooks/projects-milestone-3.md`.
 
 **Files:** tạo `components/projects/ProjectList.tsx`, `ProjectDialog.tsx`; sửa sidebar trong page, Files modal, lib/api.ts; frontend integration tests.
 
 **Interfaces:** New chat có optional project_id, project selection chỉ lọc chat chủ sở hữu; UI server error 409 giữ draft và thông báo project đang chạy.
 
 - [ ] Browser cases: tạo project→hai chat→file chung→refresh; standalone file riêng; A logout/B login không thấy project A; Admin All chats có owner rõ.
-- [ ] Implement project create/rename/instructions/delete, upload/download/trash copy; giữ sidebar rail, keyboard focus, light/dark và mobile dialog. Không thêm chat chia sẻ.
+- [x] Implement project create/rename/instructions/delete, upload/download/trash copy; giữ sidebar rail, keyboard focus, light/dark và mobile dialog. Không thêm chat chia sẻ.
 - [ ] Run browser cases và production build; xác nhận hai tab start cùng project chỉ một run, draft của request bị chặn còn nguyên.
-- [ ] Update STATUS và commit `feat: add personal projects and file management UI`.
+- [x] Update STATUS và commit `feat: add personal projects and file management UI`.
 
 ## Mốc D — Quota, vận hành và rollout
 
