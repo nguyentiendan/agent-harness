@@ -28,4 +28,4 @@ __pycache__/
 .idea/
 .vscode/
 
-/.superpowers/
+docs/*
