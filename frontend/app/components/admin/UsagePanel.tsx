@@ -65,7 +65,7 @@ export function UsagePanel({
       admin ? `/api/admin/users/${uid}/usage` : "/api/usage",
     );
     setUsage(r);
-    setLimits(r);
+    setLimits({ ...r, monthly_budget: r.monthly_budget ?? 5 });
     if (admin)
       setPending(
         await apiRequest(`/api/admin/users/${uid}/pending?offset=${offset}`),
@@ -96,7 +96,7 @@ export function UsagePanel({
       .then((r) => {
         if (live) {
           setUsage(r);
-          setLimits(r);
+          setLimits({ ...r, monthly_budget: r.monthly_budget ?? 5 });
         }
       })
       .catch((e) => {
