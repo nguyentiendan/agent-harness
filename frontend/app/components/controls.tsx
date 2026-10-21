@@ -38,8 +38,8 @@ export function ModalShell({ title, description, icon = PATHS.gear, onClose, chi
 }
 
 type Option = { value: string; label: string };
-export function SelectField({ id, label, value, options, onChange }: {
-  id?: string; label: string; value: string; options: Option[]; onChange: (value: string) => void;
+export function SelectField({ id, label, value, options, onChange, disabled = false, className }: {
+  id?: string; label: string; value: string; options: Option[]; onChange: (value: string) => void; disabled?: boolean; className?: string;
 }) {
   const uid = useId();
   const listId = `${uid}-list`;
@@ -49,9 +49,10 @@ export function SelectField({ id, label, value, options, onChange }: {
   const [active, setActive] = useState(0);
   const [position, setPosition] = useState({ left: 0, top: 0, width: 0, maxHeight: 280 });
   const [host, setHost] = useState<Element | null>(null);
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
   const selected = options.find((option) => option.value === value);
   const show = () => {
-    if (!options.length) return;
+    if (disabled || !options.length) return;
     setActive(Math.max(0, options.findIndex((option) => option.value === value)));
     setHost(trigger.current?.closest("dialog") || document.body);
     setOpen(true);
@@ -78,9 +79,9 @@ export function SelectField({ id, label, value, options, onChange }: {
   useEffect(() => { if (open) list.current?.children[active]?.scrollIntoView({ block: "nearest" }); }, [active, open]);
   const choose = (index: number) => { if (options[index]) onChange(options[index].value); setOpen(false); trigger.current?.focus(); };
   return <>
-    <button ref={trigger} id={id} type="button" role="combobox" aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={open ? listId : undefined}
+    <button ref={trigger} id={id} disabled={disabled} type="button" role="combobox" aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={open ? listId : undefined}
       aria-activedescendant={open ? `${uid}-${active}` : undefined}
-      className="ui-field flex items-center justify-between gap-3 text-left" onClick={() => open ? setOpen(false) : show()}
+      className={className || "ui-field flex items-center justify-between gap-3 text-left"} onClick={() => open ? setOpen(false) : show()}
       onKeyDown={(e) => {
         if (["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
           e.preventDefault(); if (!open) { show(); return; }

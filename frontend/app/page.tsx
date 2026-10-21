@@ -19,7 +19,7 @@ import Markdown from "./markdown";
 import ThemeToggle from "./theme-toggle";
 import { Icon, PATHS } from "./components/icons";
 import { ModalShell, SelectField } from "./components/controls";
-import { SettingsModal } from "./components/workspace-modals";
+import { ModelPicker } from "./components/ModelPicker";
 
 import AuthGate from "./components/auth/AuthGate";
 import type { User } from "../lib/auth";
@@ -131,7 +131,6 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
     };
   }, [allUsers]);
   const [primaryModel, setPrimaryModel] = useState("");
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const selectedRef = useRef("");
   const sendingRef = useRef(false);
@@ -397,7 +396,8 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
         await stopRun();
         return;
       case "settings":
-        setSettingsOpen(true);
+        document.getElementById("chat-model-select")?.focus();
+        document.getElementById("chat-model-select")?.click();
         return;
       case "files":
         setFilesOpen(true);
@@ -675,13 +675,6 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
       <div className="flex items-center gap-2 border-t border-zinc-200 p-3 dark:border-zinc-800">
         <button
           type="button"
-          onClick={() => setSettingsOpen(true)}
-          className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
-        >
-          <Icon d={PATHS.gear} size={15} /> Agent
-        </button>
-        <button
-          type="button"
           onClick={() => {
             setFilesOpen(true);
           }}
@@ -755,15 +748,6 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
               }}
             >
               <Icon d={PATHS.file} size={19} />
-            </button>
-            <button
-              type="button"
-              className="ui-icon-button"
-              title="Agent settings"
-              aria-label="Agent settings"
-              onClick={() => setSettingsOpen(true)}
-            >
-              <Icon d={PATHS.gear} size={19} />
             </button>
             {accountMenu(true)}
           </nav>
@@ -884,7 +868,7 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
 
         <div className="px-4 pb-4 sm:px-6">
           <div className="mx-auto w-full max-w-3xl">
-            <div className="flex items-end gap-2 rounded-xl border border-zinc-300 bg-white p-2 shadow-sm transition-colors focus-within:border-teal-600 focus-within:ring-2 focus-within:ring-teal-600/20 dark:border-zinc-700 dark:bg-zinc-900 dark:focus-within:border-teal-400 dark:focus-within:ring-teal-400/20">
+            <div className="flex flex-col gap-2 rounded-2xl border border-zinc-300 bg-white p-2 shadow-sm transition-colors focus-within:border-teal-600 focus-within:ring-2 focus-within:ring-teal-600/20 dark:border-zinc-700 dark:bg-zinc-900 dark:focus-within:border-teal-400 dark:focus-within:ring-teal-400/20">
               <textarea
                 ref={textareaRef}
                 value={input}
@@ -897,8 +881,10 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
                     : "Type a message or /help…"
                 }
                 rows={1}
-                className="max-h-[180px] min-h-[40px] flex-1 resize-none bg-transparent px-2 py-2 text-[14px] text-zinc-900 placeholder:text-zinc-400 focus:outline-none dark:text-zinc-50 dark:placeholder:text-zinc-500"
+                className="max-h-[180px] min-h-[40px] w-full resize-none bg-transparent px-2 py-2 text-[14px] text-zinc-900 placeholder:text-zinc-400 focus:outline-none dark:text-zinc-50 dark:placeholder:text-zinc-500"
               />
+              <div className="flex items-end justify-between gap-2">
+                <ModelPicker value={primaryModel} onChange={setPrimaryModel} disabled={readOnly} />
               <button
                 type="button"
                 onClick={() => send()}
@@ -912,6 +898,7 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
               >
                 <Icon d={PATHS.send} size={16} />
               </button>
+              </div>
             </div>
             <p className="mt-2 text-center text-[11px] text-zinc-400 dark:text-zinc-500">
               Enter to send · Shift+Enter for a new line
@@ -963,14 +950,6 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
             </p>
           )}
         </ModalShell>
-      )}
-
-      {settingsOpen && (
-        <SettingsModal
-          primaryModel={primaryModel}
-          setPrimaryModel={setPrimaryModel}
-          onClose={() => setSettingsOpen(false)}
-        />
       )}
 
       {projectDialog !== undefined && (
