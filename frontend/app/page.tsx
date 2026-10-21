@@ -590,8 +590,19 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
       </div>
 
       <div className="flex-1 overflow-y-auto p-2">
-        <div className="px-2 pt-2 pb-1 text-[11px] font-semibold tracking-wide text-zinc-400 uppercase dark:text-zinc-500">
-          {activeProject ? "Project chats" : "Chats"}
+        <div className="flex items-center justify-between gap-2 px-2 pt-2 pb-1">
+          <span className="text-[11px] font-semibold tracking-wide text-zinc-400 uppercase dark:text-zinc-500">
+            {activeProject ? "Project chats" : "Chats"}
+          </span>
+          {projectId && (
+            <button
+              type="button"
+              onClick={() => { newSession(); setProjectId(""); }}
+              className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-xs text-zinc-600 hover:bg-zinc-100 focus-visible:outline-2 focus-visible:outline-teal-600 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            >
+              <Icon d="m12 5-7 7 7 7M5 12h14" size={14} /> Back to chats
+            </button>
+          )}
         </div>
         {sessions.filter((s) => (s.project_id || "") === projectId).length ===
           0 && (

@@ -29,12 +29,6 @@ export function ProjectList({
           <Icon d={PATHS.plus} size={15} />
         </button>
       </div>
-      <button
-        className={`mb-1 w-full rounded-lg px-3 py-2 text-left text-sm ${!selected ? "bg-teal-50 text-teal-700 dark:bg-teal-500/10" : "hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
-        onClick={() => onSelect("")}
-      >
-        Standalone chats
-      </button>
       <div className="max-h-48 overflow-y-auto">
         {projects.map((p) => (
           <div
