@@ -13,6 +13,9 @@ type Limits = {
 type Call = {
   id: string;
   model: string;
+  price_class?: string;
+  input_tokens?: number;
+  output_tokens?: number;
   cost: number | null;
   reserved: number;
   status: string;
@@ -44,8 +47,11 @@ export function UsagePanel({
   onClose: () => void;
 }) {
   const [users, setUsers] = useState<User[]>([]);
+  const [modelSearch, setModelSearch] = useState("");
   const [uid, setUid] = useState(user.id);
-  const [models, setModels] = useState<{ name: string; ceiling: string }[]>([]);
+  const [models, setModels] = useState<
+    { name: string; ceiling: string; price_class?: string }[]
+  >([]);
   const [usage, setUsage] = useState<Usage | null>(null);
   const [limits, setLimits] = useState<Limits | null>(null);
   const [error, setError] = useState("");
@@ -75,9 +81,9 @@ export function UsagePanel({
     if (!admin) return;
     Promise.all([
       apiRequest<{ users: User[] }>("/api/admin/users"),
-      apiRequest<{ models: { name: string; ceiling: string }[] }>(
-        "/api/admin/models",
-      ),
+      apiRequest<{
+        models: { name: string; ceiling: string; price_class?: string }[];
+      }>("/api/admin/models"),
     ])
       .then(([u, m]) => {
         setUsers(u.users);
@@ -215,8 +221,8 @@ export function UsagePanel({
             )}
             {usage.monthly_budget === null && (
               <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
-                An administrator must assign a budget and models before this
-                account can use AI.
+                An administrator must assign a budget and model access for Paid
+                AI. Verified Free models do not need a budget.
               </p>
             )}
             {admin && limits && (
@@ -261,7 +267,7 @@ export function UsagePanel({
                     />
                   </label>
                   <label>
-                    <span className="ui-label">Concurrent runs (1–4)</span>
+                    <span className="ui-label">Paid concurrent runs (1–4)</span>
                     <input
                       required
                       className="ui-field"
@@ -295,39 +301,82 @@ export function UsagePanel({
                     />
                   </label>
                 </div>
-                <fieldset className="space-y-2">
+                <fieldset className="max-h-80 space-y-2 overflow-y-auto">
                   <legend className="ui-label">
-                    Allowed models with verified pricing
+                    Paid models allowed for this user
                   </legend>
-                  {models.map((m) => (
-                    <label
-                      key={m.name}
-                      className="flex items-center gap-2 text-sm"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={limits.models.includes(m.name)}
-                        onChange={(e) =>
-                          setLimits({
-                            ...limits,
-                            models: e.target.checked
-                              ? [...limits.models, m.name]
-                              : limits.models.filter((x) => x !== m.name),
-                          })
-                        }
-                      />
-                      <span>
-                        {m.name}{" "}
-                        <span className="text-xs text-zinc-500">
-                          · reserve up to {dollars(Number(m.ceiling))}/call
+                  <button
+                    type="button"
+                    className="ui-button mb-3"
+                    disabled={busy}
+                    onClick={() =>
+                      void action(async () => {
+                        await apiRequest("/api/admin/models/refresh", {
+                          method: "POST",
+                        });
+                        const result = await apiRequest<{
+                          models: {
+                            name: string;
+                            ceiling: string;
+                            price_class?: string;
+                          }[];
+                        }>("/api/admin/models");
+                        setModels(result.models);
+                      }, "Model catalog refreshed.")
+                    }
+                  >
+                    Refresh models
+                  </button>
+                  <input
+                    className="ui-field mb-3"
+                    aria-label="Search paid models"
+                    placeholder="Search paid models…"
+                    value={modelSearch}
+                    onChange={(e) => setModelSearch(e.target.value)}
+                  />
+                  <p className="mb-3 text-xs text-zinc-500">
+                    Verified Free models are available without a budget. Free
+                    allows up to 4 concurrent runs, subject to shared
+                    server/provider limits.
+                  </p>
+                  {models
+                    .filter(
+                      (m) =>
+                        m.price_class !== "free" &&
+                        m.name
+                          .toLowerCase()
+                          .includes(modelSearch.toLowerCase()),
+                    )
+                    .map((m) => (
+                      <label
+                        key={m.name}
+                        className="flex items-center gap-2 text-sm"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={limits.models.includes(m.name)}
+                          onChange={(e) =>
+                            setLimits({
+                              ...limits,
+                              models: e.target.checked
+                                ? [...limits.models, m.name]
+                                : limits.models.filter((x) => x !== m.name),
+                            })
+                          }
+                        />
+                        <span>
+                          {m.name}{" "}
+                          <span className="text-xs text-zinc-500">
+                            · reserve up to {dollars(Number(m.ceiling))}/call
+                          </span>
                         </span>
-                      </span>
-                    </label>
-                  ))}
+                      </label>
+                    ))}
                 </fieldset>
                 <p className="text-xs text-zinc-500">
                   Sandbox: {limits.sandbox_profile}. Stop active runs before
-                  changing limits. Zero budget or no models blocks AI access.
+                  changing limits. Zero budget or no Paid models blocks Paid AI
+                  access.
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <button disabled={busy} className="ui-primary">
@@ -354,7 +403,7 @@ export function UsagePanel({
             )}
             {!admin && (
               <p className="text-sm text-zinc-500">
-                Allowed models: {usage.models.join(", ") || "None"} ·{" "}
+                Allowed Paid models: {usage.models.join(", ") || "None"} ·{" "}
                 {usage.concurrent_runs} concurrent runs
               </p>
             )}
@@ -378,10 +427,16 @@ export function UsagePanel({
                   className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200 p-3 text-sm dark:border-zinc-700"
                 >
                   <div className="flex-1">
-                    <div>{c.model}</div>
+                    <div>
+                      {c.model}{" "}
+                      <span className="text-xs capitalize text-zinc-500">
+                        {c.price_class || "paid"}
+                      </span>
+                    </div>
                     <div className="text-xs text-zinc-500">
                       {new Date(c.created_at * 1000).toLocaleString()} ·{" "}
-                      {c.status}
+                      {c.status} · Input: {c.input_tokens ?? "—"} / Output:{" "}
+                      {c.output_tokens ?? "—"} tokens
                     </div>
                   </div>
                   <span>

@@ -2,11 +2,21 @@ import os
 import time
 import uuid
 import threading
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from decimal import Decimal
 from sqlalchemy import select
 from fastapi import HTTPException
-from app.platform.db import DB, User, UserLimit, UsageRecord, Run, Chat
+from app.platform.db import (
+    DB,
+    User,
+    UserLimit,
+    UsageRecord,
+    Run,
+    Chat,
+    CatalogModel,
+    GatewayKey,
+)
 
 lock = threading.RLock()
 
@@ -44,11 +54,22 @@ def totals(db, uid, period):
     return confirmed, pending, len([r for r in rows if r.cost is None])
 
 
-def access(db, uid, model=None, check_budget=True):
+def access(db, uid, model=None, check_budget=True, metadata=None):
     user = db.get(User, uid)
     limit = db.get(UserLimit, uid)
     if not user or not user.active or user.must_change_password:
         raise HTTPException(403, "AI access is disabled for this account.")
+    if (
+        metadata
+        and metadata.get("id") == model
+        and metadata.get("price_class") == "free"
+    ):
+        return SimpleNamespace(
+            monthly_budget=Decimal(0),
+            models=[model],
+            concurrent_runs=4,
+            max_output_tokens=limit.max_output_tokens if limit else 4096,
+        )
     if (
         not limit
         or limit.monthly_budget is None
@@ -68,10 +89,10 @@ def access(db, uid, model=None, check_budget=True):
     return limit
 
 
-def reserve(uid, rid, model, ceiling):
+def reserve(uid, rid, model, ceiling, metadata=None):
     with lock, DB.begin() as db:
         db.scalar(select(UserLimit).where(UserLimit.user_id == uid).with_for_update())
-        limit = access(db, uid, model)
+        limit = access(db, uid, model, metadata=metadata)
         run = db.get(Run, rid)
         if (
             not run
@@ -82,7 +103,17 @@ def reserve(uid, rid, model, ceiling):
         period = month()
         confirmed, pending, _ = totals(db, uid, period)
         bound = money(ceiling)
-        if bound <= 0 or confirmed + pending + bound > money(limit.monthly_budget):
+        free = bool(
+            metadata
+            and metadata.get("id") == model
+            and metadata.get("price_class") == "free"
+        )
+        if (free and bound != 0) or (
+            not free
+            and (
+                bound <= 0 or confirmed + pending + bound > money(limit.monthly_budget)
+            )
+        ):
             raise HTTPException(
                 429, "Not enough unreserved budget for this model call."
             )
@@ -93,13 +124,16 @@ def reserve(uid, rid, model, ceiling):
             period=period,
             model=model,
             reserved=bound,
+            price_snapshot=metadata,
         )
         db.add(record)
         db.flush()
         return {
             "id": record.id,
             "period": period,
-            "budget": money(limit.monthly_budget) - confirmed - pending,
+            "budget": None
+            if free
+            else money(limit.monthly_budget) - confirmed - pending,
             "max_tokens": limit.max_output_tokens,
         }
 
@@ -124,6 +158,7 @@ def settle(call_id, cost=None, request_id=None, usage=None, status="settled"):
         if cost is not None:
             row.cost = money(cost)
             row.status = status
+            block_free_anomaly(db, row)
 
 
 def limit_dto(db, uid):
@@ -171,6 +206,7 @@ def summary(db, uid, period=None):
                 "id": r.id,
                 "run_id": r.run_id,
                 "model": r.model,
+                "price_class": (r.price_snapshot or {}).get("price_class", "paid"),
                 "cost": float(r.cost) if r.cost is not None else None,
                 "reserved": float(r.reserved),
                 "status": r.status,
@@ -181,3 +217,26 @@ def summary(db, uid, period=None):
             for r in rows
         ],
     }
+
+
+def concurrency_cap(requested, active_caps):
+    return min([requested, *active_caps])
+
+
+def block_free_anomaly(db, usage):
+    if (
+        (usage.price_snapshot or {}).get("price_class") != "free"
+        or usage.cost is None
+        or usage.cost <= 0
+    ):
+        return
+    model = db.get(CatalogModel, usage.model)
+    if model:
+        model.blocked = True
+        for key in db.scalars(
+            select(GatewayKey).where(
+                GatewayKey.model_scope == model.payload["revision"],
+                GatewayKey.state.in_(["active", "provisioning"]),
+            )
+        ):
+            key.state = "revoke_pending"

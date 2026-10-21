@@ -7,7 +7,7 @@ from app.platform.auth import Input, context, admin_context, COOKIE
 from app.platform.identity import authenticate, audit
 from app.platform.db import DB, User, UserLimit, UsageRecord, Run, Chat
 from app.platform import chat
-from . import policy, gateway
+from . import policy, gateway, catalog
 
 router = APIRouter()
 
@@ -16,7 +16,7 @@ class Limits(Input):
     monthly_budget: Decimal | None = Field(
         default=None, ge=0, le=1000000, max_digits=18, decimal_places=10
     )
-    models: list[str] = Field(default_factory=list, max_length=32)
+    models: list[str] = Field(default_factory=list, max_length=512)
     concurrent_runs: int = Field(default=1, ge=1, le=4)
     max_output_tokens: int = Field(default=4096, ge=1, le=4096)
 
@@ -37,11 +37,15 @@ async def models(ctx=Depends(admin_context)):
         prices = await asyncio.to_thread(gateway.priced_models)
     except gateway.GatewayError:
         raise HTTPException(503, "Cannot verify model pricing with the gateway.")
+    remote = await asyncio.to_thread(catalog.entries)
     allowed = chat.allowed_models()
     return {
         "models": [
-            {"name": name, **prices[name]} for name in allowed if name in prices
-        ],
+            {"name": name, "price_class": "paid", **prices[name]}
+            for name in allowed
+            if name in prices
+        ]
+        + [{**m, "name": m["id"]} for m in remote if not m["blocked"]],
         "unpriced": [name for name in allowed if name not in prices],
     }
 
@@ -67,7 +71,14 @@ async def update(uid: str, body: Limits, request: Request, ctx=Depends(admin_con
         prices = await asyncio.to_thread(gateway.priced_models) if body.models else {}
     except gateway.GatewayError:
         raise HTTPException(503, "Cannot verify model pricing with the gateway.")
-    if any(m not in prices or m not in chat.allowed_models() for m in body.models):
+    remote = {m["id"]: m for m in await asyncio.to_thread(catalog.entries)}
+    if any(
+        (m not in remote and (m not in prices or m not in chat.allowed_models()))
+        or (
+            m in remote and (remote[m]["price_class"] != "paid" or remote[m]["blocked"])
+        )
+        for m in body.models
+    ):
         raise HTTPException(422, "Choose a server-enabled model with verified pricing.")
     async with chat.admission:
         db, _, _ = ctx
@@ -141,6 +152,7 @@ def resolve(cid: str, body: Resolution, ctx=Depends(admin_context)):
         raise HTTPException(409, "Stop or finish the run before reconciliation.")
     row.cost = body.cost
     row.status = "admin_reconciled"
+    policy.block_free_anomaly(db, row)
     row.reconciliation_note = body.reason
     audit(db, actor, "usage.resolve", cid)
     return {"id": cid, "status": row.status}
@@ -176,3 +188,69 @@ def pending(uid: str, offset: int = Query(default=0, ge=0), ctx=Depends(admin_co
             for r in rows[:100]
         ],
     }
+
+
+@router.get("/api/models")
+async def available_models(
+    search: str = Query(default="", max_length=200),
+    kind: str = Query(default="all", pattern="^(all|free|paid)$"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=200),
+    ctx=Depends(context),
+):
+    try:
+        remote = await asyncio.to_thread(catalog.entries)
+        prices = await asyncio.to_thread(gateway.priced_models)
+    except gateway.GatewayError:
+        raise HTTPException(503, "Model catalog is temporarily unavailable.")
+    items = [
+        {
+            "id": name,
+            "name": name,
+            "provider": "Configured gateway",
+            "price_class": "paid",
+            **prices[name],
+        }
+        for name in chat.allowed_models()
+        if name in prices
+    ] + remote
+    result = []
+    for item in items:
+        if kind != "all" and item["price_class"] != kind:
+            continue
+        if search.casefold() not in (item["id"] + " " + item["name"]).casefold():
+            continue
+        reason = None
+        try:
+            if item.get("blocked"):
+                raise HTTPException(403, "Model disabled by the platform.")
+            policy.access(ctx[0], ctx[1].id, item["id"], metadata=item)
+        except HTTPException as error:
+            reason = error.detail
+        result.append({**item, "selectable": reason is None, "reason": reason})
+    result.sort(key=lambda m: (m["price_class"] != "free", m["name"].casefold()))
+    page = result[offset : offset + limit]
+    for item in page:
+        if item["selectable"] and item["id"].startswith("openrouter/"):
+            try:
+                await asyncio.to_thread(catalog.ensure_route, item)
+            except gateway.GatewayError:
+                item["selectable"] = False
+                item["reason"] = (
+                    "Model route is temporarily unavailable. Refresh to retry."
+                )
+    return {
+        "models": page,
+        "total": len(result),
+        "has_more": offset + limit < len(result),
+    }
+
+
+@router.post("/api/admin/models/refresh")
+async def refresh_models(ctx=Depends(admin_context)):
+    try:
+        await asyncio.to_thread(catalog.refresh)
+    except gateway.GatewayError:
+        raise HTTPException(503, "Cannot refresh model catalog.")
+    audit(ctx[0], ctx[1], "catalog.refresh", "openrouter")
+    return {"ok": True}

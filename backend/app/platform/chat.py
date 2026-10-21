@@ -200,27 +200,57 @@ async def start(db, c, body):
     check_idle(db, scope_id(c))
     from app.billing import policy
 
+    from app.billing import catalog
+
+    model = body.primary_model
+    if not model and policy.enabled():
+        free = next(
+            (
+                m
+                for m in await asyncio.to_thread(catalog.entries)
+                if m["price_class"] == "free" and not m["blocked"]
+            ),
+            None,
+        )
+        if free:
+            model = free["id"]
+        else:
+            limit = policy.access(db, c.owner_id)
+            model = limit.models[0]
+    model = model or allowed_models()[0]
+    metadata = (
+        await asyncio.to_thread(catalog.lookup, model) if policy.enabled() else None
+    )
     limit = (
-        policy.access(db, c.owner_id, body.primary_model)
+        policy.access(db, c.owner_id, model, metadata=metadata)
         if policy.enabled()
         else None
     )
     if limit and body.reviewer_model:
-        policy.access(db, c.owner_id, body.reviewer_model)
+        reviewer_meta = await asyncio.to_thread(catalog.lookup, body.reviewer_model)
+        policy.access(db, c.owner_id, body.reviewer_model, metadata=reviewer_meta)
     active = list(db.scalars(select(Run).where(Run.status == "running")))
     if c.status == "running" or sum(
         db.get(Chat, r.session_id).owner_id == c.owner_id for r in active
-    ) >= (limit.concurrent_runs if limit else 1):
+    ) >= policy.concurrency_cap(
+        limit.concurrent_runs if limit else 1,
+        [
+            r.concurrency_cap
+            for r in active
+            if db.get(Chat, r.session_id).owner_id == c.owner_id
+        ],
+    ):
         raise HTTPException(
             409, "You already have a running chat. Stop it or wait for completion."
         )
     if len(active) >= 4:
         raise HTTPException(429, "The server is busy. Try again shortly.")
-    model = body.primary_model or (limit.models[0] if limit else allowed_models()[0])
-    if model not in allowed_models():
+    if not metadata and model not in allowed_models():
         raise HTTPException(422, "Model is not enabled on this server.")
     if body.reviewer_model and body.reviewer_model not in allowed_models():
         raise HTTPException(422, "Reviewer model is not enabled.")
+    if metadata:
+        await asyncio.to_thread(catalog.ensure_route, metadata)
     offset = len(events_for(db, c.id))
     rid = str(uuid.uuid4())
     r = Run(
@@ -229,6 +259,7 @@ async def start(db, c, body):
         request_id=body.request_id,
         body_hash=fingerprint,
         model=model,
+        concurrency_cap=limit.concurrent_runs if limit else 1,
         event_offset=offset,
     )
     db.add(r)

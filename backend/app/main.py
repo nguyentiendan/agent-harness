@@ -28,6 +28,10 @@ async def lifespan(app):
                     from app.billing.reconcile import reconcile
 
                     await asyncio.to_thread(reconcile)
+                if ticks % 60 == 0:
+                    from app.billing import catalog
+
+                    await asyncio.to_thread(catalog.refresh)
                 if ticks >= 720:
                     await asyncio.to_thread(purge)
                     ticks = 0
@@ -80,3 +84,11 @@ async def invalid_request(request, error):
             ],
         },
     )
+
+
+from app.billing.gateway import GatewayError
+
+
+@app.exception_handler(GatewayError)
+async def gateway_failure(request, error):
+    return JSONResponse(status_code=503, content={"detail": str(error)})

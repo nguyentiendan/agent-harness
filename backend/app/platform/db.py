@@ -74,6 +74,7 @@ class Run(Base):
     body_hash: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(20), default="running")
     model: Mapped[str] = mapped_column(String(120))
+    concurrency_cap: Mapped[int] = mapped_column(Integer, default=1)
     event_offset: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[float] = mapped_column(Float, default=time.time)
     finished_at: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -155,6 +156,7 @@ class GatewayKey(Base):
     key_hash: Mapped[str] = mapped_column(String(64), unique=True)
     state: Mapped[str] = mapped_column(String(24), default="provisioning")
     expires_at: Mapped[float] = mapped_column(Float)
+    model_scope: Mapped[str] = mapped_column(String(200), default="legacy")
 
 
 class UsageRecord(Base):
@@ -164,6 +166,7 @@ class UsageRecord(Base):
     run_id: Mapped[str] = mapped_column(String(36), index=True)
     period: Mapped[str] = mapped_column(String(7), index=True)
     model: Mapped[str] = mapped_column(String(120))
+    price_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     reserved: Mapped[float] = mapped_column(Numeric(18, 10))
     cost: Mapped[float | None] = mapped_column(Numeric(18, 10), nullable=True)
     status: Mapped[str] = mapped_column(String(24), default="pending")
@@ -172,6 +175,16 @@ class UsageRecord(Base):
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[float] = mapped_column(Float, default=time.time)
+
+
+class CatalogModel(Base):
+    __tablename__ = "model_catalog"
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[float] = mapped_column(Float, default=0)
+    present: Mapped[bool] = mapped_column(Boolean, default=True)
+    blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    route_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 # No production fallback to a local JSON/SQLite file.

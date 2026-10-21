@@ -108,19 +108,27 @@ def mark_revoke(db, uid):
         k.state = "revoke_pending"
 
 
-def user_key(uid, period, budget):
+def user_key(uid, period, budget, model=None, metadata=None):
     with key_lock:
         revoke_pending(uid)
         with DB.begin() as db:
             user = db.get(User, uid)
             limit = db.get(UserLimit, uid)
-            if not user or not user.active or not limit:
+            free = bool(metadata and metadata.get("price_class") == "free")
+            revision = limit.revision if limit else 0
+            scope = (
+                metadata["revision"]
+                if metadata
+                else (hashlib.sha256(model.encode()).hexdigest() if model else "legacy")
+            )
+            if not user or not user.active or (not free and not limit):
                 raise GatewayError("User has no AI access.")
             key = db.scalar(
                 select(GatewayKey).where(
                     GatewayKey.user_id == uid,
                     GatewayKey.period == period,
-                    GatewayKey.revision == limit.revision,
+                    GatewayKey.revision == revision,
+                    GatewayKey.model_scope == scope,
                     GatewayKey.state.in_(["active", "provisioning"]),
                 )
             )
@@ -151,7 +159,8 @@ def user_key(uid, period, budget):
                     id=str(uuid.uuid4()),
                     user_id=uid,
                     period=period,
-                    revision=limit.revision,
+                    revision=revision,
+                    model_scope=scope,
                     encrypted_key=cipher().encrypt(raw.encode()).decode(),
                     key_hash=hashlib.sha256(raw.encode()).hexdigest(),
                     expires_at=end.timestamp(),
@@ -162,8 +171,8 @@ def user_key(uid, period, budget):
                 k: getattr(key, k)
                 for k in ["id", "key_hash", "encrypted_key", "state", "expires_at"]
             }
-            models = list(limit.models)
-            parallel = limit.concurrent_runs
+            models = [model] if model else list(limit.models)
+            parallel = 4 if free else limit.concurrent_runs
         raw = cipher().decrypt(snapshot["encrypted_key"].encode()).decode()
         if snapshot["state"] != "active":
             # A known key is persisted before remote create, so retries never create unlimited orphan keys.
@@ -176,7 +185,7 @@ def user_key(uid, period, budget):
                         "key_alias": "platform-" + snapshot["id"],
                         "user_id": "platform-" + uid,
                         "models": models,
-                        "max_budget": float(budget),
+                        "max_budget": None if free else float(budget),
                         "duration": str(
                             max(1, int(snapshot["expires_at"] - time.time()))
                         )

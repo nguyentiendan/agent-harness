@@ -4,7 +4,7 @@ import asyncio
 import os
 from types import SimpleNamespace
 import httpx
-from . import policy, gateway
+from . import policy, gateway, catalog
 from app.platform.db import DB, Run
 from fastapi import HTTPException
 
@@ -20,29 +20,49 @@ def objectify(value):
 async def complete(uid, rid, messages, model, tools, temperature, max_tokens):
     if not uid or not rid:
         raise gateway.GatewayError("AI calls require an authenticated user and run.")
-    prices = await asyncio.to_thread(gateway.priced_models)
-    if model not in prices:
-        raise gateway.GatewayError(
-            "This model has no verified pricing/context limits; AI call blocked."
-        )
-    reservation = policy.reserve(uid, rid, model, prices[model]["ceiling"])
+    metadata = await asyncio.to_thread(catalog.lookup, model)
+    if metadata:
+        price = metadata
+        route = await asyncio.to_thread(catalog.ensure_route, metadata)
+    else:
+        prices = await asyncio.to_thread(gateway.priced_models)
+        if model not in prices:
+            raise gateway.GatewayError(
+                "This model has no verified pricing/context limits; AI call blocked."
+            )
+        price = prices[model]
+        route = model
+    reservation = policy.reserve(uid, rid, model, price["ceiling"], metadata=metadata)
     # Provisioning failure has no provider call; release precisely this reservation.
     try:
         key = await asyncio.to_thread(
-            gateway.user_key, uid, reservation["period"], reservation["budget"]
+            gateway.user_key,
+            uid,
+            reservation["period"],
+            reservation["budget"],
+            route,
+            metadata,
         )
+        if metadata:
+            current = await asyncio.to_thread(catalog.lookup, model)
+            if current["revision"] != metadata["revision"]:
+                raise gateway.GatewayError(
+                    "Model catalog changed before dispatch. Try again."
+                )
         with DB() as db:
-            policy.access(db, uid, model, check_budget=False)
+            policy.access(db, uid, model, check_budget=False, metadata=metadata)
             if db.get(Run, rid).status != "running":
                 raise HTTPException(409, "Run stopped before model call.")
     except BaseException:
         policy.settle(reservation["id"], 0, status="not_dispatched")
         raise
     payload = {
-        "model": model,
+        "model": route,
         "messages": messages,
         "temperature": temperature,
-        "max_tokens": min(max_tokens, reservation["max_tokens"]),
+        "max_tokens": min(
+            max_tokens, reservation["max_tokens"], price.get("max_output_tokens", 4096)
+        ),
         "metadata": {"platform_usage_id": reservation["id"], "platform_run_id": rid},
         "user": "platform-" + uid,
     }
@@ -60,12 +80,34 @@ async def complete(uid, rid, messages, model, tools, temperature, max_tokens):
             data = r.json()
         except ValueError:
             data = {}
-        cost = r.headers.get("x-litellm-response-cost")
+        # Provider cost is independent evidence: a zero gateway estimate must
+        # never hide an actual charge on a supposedly Free route.
+        costs = []
+        for evidence in (
+            r.headers.get("x-litellm-response-cost"),
+            (data.get("usage") or {}).get("cost"),
+        ):
+            if evidence is not None:
+                try:
+                    costs.append(policy.money(evidence))
+                except ValueError:
+                    pass
+        cost = max(costs) if costs else None
         request_id = data.get("id")
-        try:
-            policy.settle(reservation["id"], cost, request_id, data.get("usage"))
-        except ValueError:
-            policy.settle(reservation["id"], None, request_id, data.get("usage"))
+        policy.settle(reservation["id"], cost, request_id, data.get("usage"))
+        if metadata and metadata["price_class"] == "free" and cost is not None:
+            try:
+                if policy.money(cost) > 0:
+                    catalog.disable(model)
+                    raise gateway.GatewayError(
+                        "Unexpected cost on a Free route. This route has been disabled."
+                    )
+            except ValueError:
+                pass
+        if r.status_code == 429:
+            raise gateway.GatewayError(
+                "Model provider or gateway rate limit reached. Wait before trying again; no automatic retry was sent."
+            )
         if not r.is_success:
             raise gateway.GatewayError(
                 "AI gateway rejected the request. Usage may remain pending until reconciled."

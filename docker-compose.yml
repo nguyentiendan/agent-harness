@@ -61,6 +61,7 @@ services:
       # Route every model call through the gateway (dashboards, keys, budgets).
       - LITELLM_PROXY_URL=${LITELLM_PROXY_URL:-http://litellm:4000}
       - PLATFORM_LIMITS_ENABLED=true
+      - OPENROUTER_ENABLED=${OPENROUTER_ENABLED:-true}
       - PLATFORM_KEY_ENCRYPTION_KEY=${PLATFORM_KEY_ENCRYPTION_KEY:?Set PLATFORM_KEY_ENCRYPTION_KEY in .env}
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
     depends_on:
@@ -104,6 +105,7 @@ services:
       - DATABASE_URL=postgresql://litellm:${POSTGRES_PASSWORD:-litellm}@litellm-db:5432/litellm
       - STORE_MODEL_IN_DB=True
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
