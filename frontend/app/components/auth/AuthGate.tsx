@@ -9,30 +9,32 @@ import {
   type User,
 } from "../../../lib/auth";
 import { ModalShell } from "../controls";
-import { UsagePanel } from "../admin/UsagePanel";
-import { UsersPanel } from "../admin/UsersPanel";
+import { AccountMenu } from "./AccountMenu";
+import { SettingsDialog } from "./SettingsDialog";
+import { PasswordDialog } from "./PasswordDialog";
 
 export default function AuthGate({
   children,
 }: {
-  children: (user: User) => ReactNode;
+  children: (
+    user: User,
+    accountMenu: (compact?: boolean) => ReactNode,
+  ) => ReactNode;
 }) {
   const changing = useRef(false);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [usageOpen, setUsageOpen] = useState<"mine" | "admin" | null>(null);
-  const [usersOpen, setUsersOpen] = useState(false);
-  const [passwordOpen, setPasswordOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [logoutOpen, setLogoutOpen] = useState(false);
   useEffect(() => {
     let live = true;
     const expired = () => {
       if (live) {
         setUser(null);
-        setUsersOpen(false);
-      setUsageOpen(null);
-        setPasswordOpen(false);
+        setSettingsOpen(false);
+        setLogoutOpen(false);
       }
     };
     window.addEventListener("auth-expired", expired);
@@ -85,9 +87,8 @@ export default function AuthGate({
       await apiRequest("/api/auth/logout", { method: "POST" });
       clearAuth();
       setUser(null);
-      setUsersOpen(false);
-      setUsageOpen(null);
-      setPasswordOpen(false);
+      setSettingsOpen(false);
+      setLogoutOpen(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not sign out.");
     } finally {
@@ -153,147 +154,74 @@ export default function AuthGate({
         </div>
       </main>
     );
-  return (
-    <div className="flex h-dvh flex-col bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
-      <div className="flex flex-wrap items-center justify-end gap-2 border-b border-zinc-200 px-4 py-2 text-xs dark:border-zinc-800">
-        <span className="mr-auto font-medium">
-          {user.username}{" "}
-          <span className="ml-2 rounded-full bg-teal-50 px-2 py-1 text-teal-700 dark:bg-teal-950 dark:text-teal-300">
-            {user.role}
-          </span>
-        </span>
-        {error && (
-          <span role="alert" className="text-rose-600">
-            {error}
-          </span>
-        )}
-        {user.role === "admin" && !user.must_change_password && (
-          <button className="ui-button" onClick={() => setUsersOpen(true)}>
-            Manage users
-          </button>
-        )}
-        {!user.must_change_password && <button className="ui-button" onClick={() => setUsageOpen("mine")}>My usage</button>}
-        {user.role === "admin" && !user.must_change_password && <button className="ui-button" onClick={() => setUsageOpen("admin")}>AI limits</button>}
-        <button className="ui-button" onClick={() => setPasswordOpen(true)}>
-          Password
-        </button>
-        <button className="ui-button" disabled={busy} onClick={logout}>
-          Sign out
-        </button>
-      </div>
-      <div className="min-h-0 flex-1">
-        {!user.must_change_password && children(user)}
-      </div>
-      {(passwordOpen || user.must_change_password) && (
-        <PasswordDialog
-          required={user.must_change_password}
-          onClose={() => setPasswordOpen(false)}
-          onChanged={() => {
-            clearAuth();
-            setUser(null);
-            setPasswordOpen(false);
-            setError("Password changed. Sign in again.");
-          }}
-        />
-      )}
-      {usageOpen && !user.must_change_password && <UsagePanel key={usageOpen} user={user} admin={usageOpen === "admin" && user.role === "admin"} onClose={() => setUsageOpen(null)} />}
-      {usersOpen && (
-        <UsersPanel currentId={user.id} onClose={() => setUsersOpen(false)} />
-      )}
-    </div>
-  );
-}
-function PasswordDialog({
-  required,
-  onClose,
-  onChanged,
-}: {
-  required: boolean;
-  onClose: () => void;
-  onChanged: () => void;
-}) {
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const submit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    beginAuthChange();
-    setBusy(true);
+  const changedPassword = () => {
+    clearAuth();
+    setUser(null);
+    setSettingsOpen(false);
+    setError("Password changed. Sign in again.");
+  };
+  const requestLogout = () => {
     setError("");
-    const data = new FormData(e.currentTarget);
-    if (data.get("new_password") !== data.get("confirm")) {
-      setError("Passwords do not match.");
-      setBusy(false);
-      return;
-    }
-    try {
-      await apiRequest("/api/auth/password", {
-        method: "POST",
-        body: JSON.stringify({
-          current_password: data.get("current_password"),
-          new_password: data.get("new_password"),
-        }),
-      });
-      onChanged();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not change password.");
-    } finally {
-      setBusy(false);
-    }
+    setLogoutOpen(true);
   };
   return (
-    <ModalShell
-      title={required ? "Set your own password" : "Change password"}
-      description={
-        required
-          ? "Replace your temporary password before using the platform."
-          : "Changing your password signs out all your devices."
-      }
-      onClose={() => {
-        if (!required && !busy) onClose();
-      }}
-    >
-      <form onSubmit={submit} className="space-y-4">
-        <label className="block">
-          <span className="ui-label">Current password</span>
-          <input
-            type="password"
-            name="current_password"
-            autoComplete="current-password"
-            required
-            className="ui-field"
-          />
-        </label>
-        <label className="block">
-          <span className="ui-label">New password (12–128 characters)</span>
-          <input
-            type="password"
-            name="new_password"
-            autoComplete="new-password"
-            required
-            minLength={12}
-            maxLength={128}
-            className="ui-field"
-          />
-        </label>
-        <label className="block">
-          <span className="ui-label">Confirm password</span>
-          <input
-            type="password"
-            name="confirm"
-            autoComplete="new-password"
-            required
-            className="ui-field"
-          />
-        </label>
-        {error && (
-          <p role="alert" className="text-sm text-rose-600">
-            {error}
-          </p>
-        )}
-        <button className="ui-primary" disabled={busy}>
-          {busy ? "Saving…" : "Save password"}
-        </button>
-      </form>
-    </ModalShell>
+    <div className="flex h-dvh flex-col bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
+      <div className="min-h-0 flex-1">
+        {!user.must_change_password &&
+          children(user, (compact = false) => (
+            <AccountMenu
+              user={user}
+              compact={compact}
+              onSettings={() => setSettingsOpen(true)}
+              onLogout={requestLogout}
+            />
+          ))}
+      </div>
+      {user.must_change_password && (
+        <PasswordDialog
+          required
+          onClose={() => {}}
+          onChanged={changedPassword}
+          onLogout={requestLogout}
+        />
+      )}
+      {settingsOpen && !user.must_change_password && (
+        <SettingsDialog
+          key={user.role}
+          user={user}
+          onClose={() => setSettingsOpen(false)}
+          onLogout={requestLogout}
+          onPasswordChanged={changedPassword}
+        />
+      )}
+      {logoutOpen && (
+        <ModalShell
+          title="Log out?"
+          description={`You’re signed in as ${user.username}. You can sign back in to continue your conversations.`}
+          onClose={() => {
+            if (!busy) setLogoutOpen(false);
+          }}
+        >
+          {error && (
+            <p role="alert" className="mb-4 text-sm text-rose-600">
+              {error}
+            </p>
+          )}
+          <div className="flex justify-end gap-3">
+            <button
+              autoFocus
+              className="ui-button"
+              disabled={busy}
+              onClick={() => setLogoutOpen(false)}
+            >
+              Cancel
+            </button>
+            <button className="ui-primary" disabled={busy} onClick={logout}>
+              {busy ? "Logging out…" : "Log out"}
+            </button>
+          </div>
+        </ModalShell>
+      )}
+    </div>
   );
 }

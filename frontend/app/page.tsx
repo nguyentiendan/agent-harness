@@ -105,11 +105,11 @@ const DOT_STYLES: Record<string, string> = {
 
 export default function Home() {
   return (
-    <AuthGate>{(user) => <ChatHome key={user.id} user={user} />}</AuthGate>
+    <AuthGate>{(user, accountMenu) => <ChatHome key={user.id} user={user} accountMenu={accountMenu} />}</AuthGate>
   );
 }
 
-function ChatHome({ user }: { user: User }) {
+function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: boolean) => React.ReactNode }) {
   const apiBaseUrl = "";
   const [allUsers, setAllUsers] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -667,7 +667,7 @@ function ChatHome({ user }: { user: User }) {
           onClick={() => setSettingsOpen(true)}
           className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
         >
-          <Icon d={PATHS.gear} size={15} /> Settings
+          <Icon d={PATHS.gear} size={15} /> Agent
         </button>
         <button
           type="button"
@@ -678,8 +678,8 @@ function ChatHome({ user }: { user: User }) {
         >
           <Icon d={PATHS.folder} size={15} /> Files
         </button>
-        <ThemeToggle />
       </div>
+      <div className="px-3 pb-3">{accountMenu()}</div>
     </div>
   );
 
@@ -748,13 +748,13 @@ function ChatHome({ user }: { user: User }) {
             <button
               type="button"
               className="ui-icon-button"
-              title="Settings"
-              aria-label="Settings"
+              title="Agent settings"
+              aria-label="Agent settings"
               onClick={() => setSettingsOpen(true)}
             >
               <Icon d={PATHS.gear} size={19} />
             </button>
-            <ThemeToggle />
+            {accountMenu(true)}
           </nav>
         )}
       </aside>

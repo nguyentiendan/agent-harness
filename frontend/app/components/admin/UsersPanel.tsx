@@ -5,13 +5,20 @@ import { ModalShell, SelectField } from "../controls";
 export function UsersPanel({
   currentId,
   onClose,
+  embedded = false,
+  onBusyChange,
 }: {
+  embedded?: boolean;
+  onBusyChange?: (busy: boolean) => void;
   currentId: string;
   onClose: () => void;
 }) {
   const [users, setUsers] = useState<User[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    onBusyChange?.(busy);
+  }, [busy, onBusyChange]);
   const [role, setRole] = useState("user");
   const [reset, setReset] = useState<User | null>(null);
   const [notice, setNotice] = useState("");
@@ -56,6 +63,7 @@ export function UsersPanel({
   };
   return (
     <ModalShell
+      embedded={embedded}
       wide
       title="User management"
       description="Create accounts, manage roles and revoke access."

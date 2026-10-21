@@ -4,19 +4,21 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Icon, PATHS } from "./icons";
 
-export function ModalShell({ title, description, icon = PATHS.gear, onClose, children, footer, wide = false }: {
+export function ModalShell({ title, description, icon = PATHS.gear, onClose, children, footer, wide = false, embedded = false }: {
   title: string; description?: string; icon?: string; onClose: () => void;
-  children: ReactNode; footer?: ReactNode; wide?: boolean;
+  children: ReactNode; footer?: ReactNode; wide?: boolean; embedded?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const descriptionId = useId();
   useEffect(() => {
+    if (embedded) return;
     const dialog = ref.current!;
     const previous = document.activeElement as HTMLElement | null;
     dialog.showModal();
     return () => { dialog.close(); previous?.focus(); };
-  }, []);
+  }, [embedded]);
+  if (embedded) return <>{children}</>;
   return (
     <dialog ref={ref} aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined}
       onCancel={(e) => { e.preventDefault(); onClose(); }}
