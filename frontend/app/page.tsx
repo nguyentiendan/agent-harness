@@ -105,11 +105,21 @@ const DOT_STYLES: Record<string, string> = {
 
 export default function Home() {
   return (
-    <AuthGate>{(user, accountMenu) => <ChatHome key={user.id} user={user} accountMenu={accountMenu} />}</AuthGate>
+    <AuthGate>
+      {(user, accountMenu) => (
+        <ChatHome key={user.id} user={user} accountMenu={accountMenu} />
+      )}
+    </AuthGate>
   );
 }
 
-function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: boolean) => React.ReactNode }) {
+function ChatHome({
+  user,
+  accountMenu,
+}: {
+  user: User;
+  accountMenu: (compact?: boolean) => React.ReactNode;
+}) {
   const apiBaseUrl = "";
   const [allUsers, setAllUsers] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -148,6 +158,10 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
 
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState("");
+  const selectedChat = sessions.find((s) => s.session_id === currentSessionId);
+  const fileProjectId = currentSessionId ? selectedChat?.project_id : projectId;
+  const fileProject = projects.find((p) => p.id === fileProjectId);
+  const canFiles = !!fileProjectId || !!selectedChat?.legacy_files_available;
   const [status, setStatus] = useState<"idle" | HarnessStatus>("idle");
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -167,7 +181,6 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
       // backend not ready
     }
   }, [apiBaseUrl, allUsers]);
-
 
   useEffect(() => {
     refreshSessions();
@@ -400,7 +413,8 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
         document.getElementById("chat-model-select")?.click();
         return;
       case "files":
-        setFilesOpen(true);
+        if (canFiles) setFilesOpen(true);
+        else pushSystem("Create or open a Project to work with files.");
         return;
       case "model":
         if (!args) {
@@ -597,7 +611,10 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
           {projectId && (
             <button
               type="button"
-              onClick={() => { newSession(); setProjectId(""); }}
+              onClick={() => {
+                newSession();
+                setProjectId("");
+              }}
               className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-xs text-zinc-600 hover:bg-zinc-100 focus-visible:outline-2 focus-visible:outline-teal-600 dark:text-zinc-400 dark:hover:bg-zinc-800"
             >
               <Icon d="m12 5-7 7 7 7M5 12h14" size={14} /> Back to chats
@@ -672,17 +689,19 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
           })}
       </div>
 
-      <div className="flex items-center gap-2 border-t border-zinc-200 p-3 dark:border-zinc-800">
-        <button
-          type="button"
-          onClick={() => {
-            setFilesOpen(true);
-          }}
-          className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
-        >
-          <Icon d={PATHS.folder} size={15} /> Files
-        </button>
-      </div>
+      {canFiles && (
+        <div className="flex items-center gap-2 border-t border-zinc-200 p-3 dark:border-zinc-800">
+          <button
+            type="button"
+            onClick={() => {
+              setFilesOpen(true);
+            }}
+            className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+          >
+            <Icon d={PATHS.folder} size={15} /> Files
+          </button>
+        </div>
+      )}
       <div className="px-3 pb-3">{accountMenu()}</div>
     </div>
   );
@@ -738,17 +757,19 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
               <Icon d={PATHS.folder} size={19} />
             </button>
             <div className="flex-1" />
-            <button
-              type="button"
-              className="ui-icon-button"
-              title="Files"
-              aria-label="Files"
-              onClick={() => {
-                setFilesOpen(true);
-              }}
-            >
-              <Icon d={PATHS.file} size={19} />
-            </button>
+            {canFiles && (
+              <button
+                type="button"
+                className="ui-icon-button"
+                title="Files"
+                aria-label="Files"
+                onClick={() => {
+                  setFilesOpen(true);
+                }}
+              >
+                <Icon d={PATHS.file} size={19} />
+              </button>
+            )}
             {accountMenu(true)}
           </nav>
         )}
@@ -825,8 +846,8 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
                   What should the agent do?
                 </h2>
                 <p className="mt-1.5 max-w-md text-[13px] text-zinc-500 dark:text-zinc-400">
-                  Your conversations are private. Ask a question or work with
-                  files in your chat’s offline sandbox.
+                  Your conversations are private. Ask questions here, or create
+                  a Project to work with files and code.
                 </p>
                 <div className="mt-6 grid w-full max-w-lg gap-2 sm:grid-cols-2">
                   {SUGGESTIONS.map((s) => (
@@ -884,22 +905,39 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
                 className="max-h-[180px] min-h-[40px] w-full resize-none bg-transparent px-2 py-2 text-[14px] text-zinc-900 placeholder:text-zinc-400 focus:outline-none dark:text-zinc-50 dark:placeholder:text-zinc-500"
               />
               <div className="flex items-end justify-between gap-2">
-                <ModelPicker value={primaryModel} onChange={setPrimaryModel} disabled={readOnly} />
-              <button
-                type="button"
-                onClick={() => send()}
-                disabled={
-                  readOnly ||
-                  !input.trim() ||
-                  (running && !input.trim().startsWith("/"))
-                }
-                aria-label="Send goal"
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-teal-600 text-white transition-colors hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400 dark:bg-teal-500 dark:text-zinc-950 dark:hover:bg-teal-400 dark:disabled:bg-zinc-800 dark:disabled:text-zinc-600"
-              >
-                <Icon d={PATHS.send} size={16} />
-              </button>
+                <ModelPicker
+                  value={primaryModel}
+                  onChange={setPrimaryModel}
+                  disabled={readOnly}
+                />
+                <button
+                  type="button"
+                  onClick={() => send()}
+                  disabled={
+                    readOnly ||
+                    !input.trim() ||
+                    (running && !input.trim().startsWith("/"))
+                  }
+                  aria-label="Send goal"
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-teal-600 text-white transition-colors hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400 dark:bg-teal-500 dark:text-zinc-950 dark:hover:bg-teal-400 dark:disabled:bg-zinc-800 dark:disabled:text-zinc-600"
+                >
+                  <Icon d={PATHS.send} size={16} />
+                </button>
               </div>
             </div>
+            {!fileProjectId && (
+              <div className="mt-3 flex items-center justify-center gap-3 text-xs text-zinc-500">
+                <span>
+                  Chat only · Use a Project to run code or edit files.
+                </span>
+                <button
+                  className="font-medium text-teal-700 dark:text-teal-300"
+                  onClick={() => setProjectDialog(null)}
+                >
+                  Create Project
+                </button>
+              </div>
+            )}
             <p className="mt-2 text-center text-[11px] text-zinc-400 dark:text-zinc-500">
               Enter to send · Shift+Enter for a new line
             </p>
@@ -955,6 +993,11 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
       {projectDialog !== undefined && (
         <ProjectDialog
           project={projectDialog}
+          readOnly={!!projectDialog && projectDialog.owner_id !== user.id}
+          onUpdated={(p) => {
+            setProjects((items) => items.map((x) => (x.id === p.id ? p : x)));
+            setProjectDialog(p);
+          }}
           onClose={() => setProjectDialog(undefined)}
           onSaved={(p) => {
             setProjects((items) => [p, ...items.filter((x) => x.id !== p.id)]);
@@ -975,9 +1018,10 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
           }}
         />
       )}
-      {filesOpen && (
+      {filesOpen && canFiles && (
         <FileManager
-          key={currentSessionId || projectId || "new"}
+          key={`${currentSessionId || fileProjectId}:${fileProject?.workspace.revision ?? 0}`}
+          exportOnly={!fileProjectId || readOnly}
           base={
             currentSessionId
               ? `/api/sessions/${currentSessionId}`
@@ -986,14 +1030,19 @@ function ChatHome({ user, accountMenu }: { user: User; accountMenu: (compact?: b
                 : null
           }
           label={
-            activeProject
-              ? `Project: ${activeProject.name}`
-              : "Files private to this chat"
+            fileProject
+              ? `Project: ${fileProject.name} · ${fileProject.workspace.mode === "local" ? fileProject.workspace.local_path : "Sandbox storage"}`
+              : "Legacy chat files"
           }
           onClose={() => setFilesOpen(false)}
           onPrepare={async () => {
+            if (!fileProjectId) {
+              setFilesOpen(false);
+              setProjectDialog(null);
+              return;
+            }
             const epoch = viewEpoch.current;
-            const c = await createSession(projectId || null);
+            const c = await createSession(fileProjectId);
             if (epoch !== viewEpoch.current) return;
             selectedRef.current = c.session_id;
             setCurrentSessionId(c.session_id);

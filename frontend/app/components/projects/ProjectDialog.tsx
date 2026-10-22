@@ -2,7 +2,9 @@
 import { useState } from "react";
 import { ModalShell } from "../controls";
 import { apiRequest } from "../../../lib/auth";
+import { WorkspaceSettings, type WorkspaceBinding } from "./WorkspaceSettings";
 export interface Project {
+  workspace: WorkspaceBinding;
   id: string;
   name: string;
   instructions: string;
@@ -14,8 +16,12 @@ export function ProjectDialog({
   onClose,
   onSaved,
   onDeleted,
+  onUpdated,
+  readOnly = false,
 }: {
   project: Project | null;
+  onUpdated: (p: Project) => void;
+  readOnly?: boolean;
   onClose: () => void;
   onSaved: (p: Project) => void;
   onDeleted: (id: string) => void;
@@ -70,7 +76,7 @@ export function ProjectDialog({
           </button>
           <button
             className="ui-primary"
-            disabled={busy || !name.trim()}
+            disabled={busy || readOnly || !name.trim()}
             onClick={save}
           >
             {busy ? "Saving…" : "Save project"}
@@ -83,6 +89,7 @@ export function ProjectDialog({
       </label>
       <input
         id="project-name"
+        disabled={busy || readOnly}
         autoFocus
         className="ui-field"
         maxLength={120}
@@ -93,6 +100,7 @@ export function ProjectDialog({
         Instructions
       </label>
       <textarea
+        disabled={busy || readOnly}
         id="project-instructions"
         className="ui-field min-h-36"
         maxLength={16000}
@@ -104,19 +112,32 @@ export function ProjectDialog({
         Chats share these instructions and files. Each conversation keeps its
         own history.
       </p>
+      {project ? (
+        <WorkspaceSettings
+          project={project}
+          readOnly={readOnly || busy}
+          onUpdated={onUpdated}
+          onBusyChange={setBusy}
+        />
+      ) : (
+        <p className="mt-4 rounded-xl bg-teal-50 p-3 text-xs text-teal-800 dark:bg-teal-900/20 dark:text-teal-200">
+          Your project starts with private sandbox storage. After creation, open
+          Project settings to connect a local folder.
+        </p>
+      )}
       {error && (
         <p role="alert" className="mt-4 text-sm text-rose-600">
           {error}
         </p>
       )}
-      {project && (
+      {project && !readOnly && (
         <div className="mt-6 border-t border-zinc-200 pt-4 dark:border-zinc-800">
           {confirm ? (
             <>
               <p className="mb-3 text-sm text-rose-600">
-                Delete “{project.name}” and all its chats? Files go to trash for
-                7 days, then are permanently removed. You cannot open them from
-                this app after deletion.
+                Delete “{project.name}” and all its chats? Managed files go to
+                trash for 7 days, then are permanently removed. Connected local
+                folders and their files remain on your PC.
               </p>
               <button
                 className="ui-button text-rose-600"
@@ -136,6 +157,7 @@ export function ProjectDialog({
           ) : (
             <button
               className="text-sm text-rose-600"
+              disabled={busy}
               onClick={() => setConfirm(true)}
             >
               Delete project…

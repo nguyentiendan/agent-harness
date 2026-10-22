@@ -12,6 +12,8 @@ export interface RunMetrics {
 }
 
 export interface SessionSummary {
+  execution_mode: "chat" | "project";
+  legacy_files_available: boolean;
   session_id: string;
   project_id: string | null;
   goal: string;

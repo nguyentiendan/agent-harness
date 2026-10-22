@@ -8,8 +8,10 @@ export function FileManager({
   label,
   onClose,
   onPrepare,
+  exportOnly,
 }: {
   base: string | null;
+  exportOnly: boolean;
   label: string;
   onClose: () => void;
   onPrepare: () => Promise<void>;
@@ -38,6 +40,9 @@ export function FileManager({
     }
   }, [base]);
   useEffect(() => {
+    setFiles([]);
+    setPreview(null);
+    setError("");
     refresh();
     return () => {
       epoch.current++;
@@ -111,7 +116,12 @@ export function FileManager({
     <ModalShell
       wide
       title="Files"
-      description={label + " · Files in a project are shared across its chats."}
+      description={
+        label +
+        (exportOnly
+          ? " · Download only"
+          : " · Shared across this project’s chats")
+      }
       onClose={() => {
         if (!busy) onClose();
       }}
@@ -137,7 +147,7 @@ export function FileManager({
             }
           }}
         >
-          Create a chat to upload files
+          Create a Project to work with files
         </button>
       ) : (
         <>
@@ -152,23 +162,25 @@ export function FileManager({
             <button className="ui-button" disabled={busy} onClick={refresh}>
               Refresh
             </button>
-            <label
-              className={`ui-primary cursor-pointer ${busy ? "pointer-events-none opacity-50" : ""}`}
-            >
-              Upload file
-              <input
-                className="sr-only"
-                type="file"
-                disabled={busy}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  e.target.value = "";
-                  if (!f) return;
-                  if (files.some((x) => x.path === f.name)) setPending(f);
-                  else upload(f);
-                }}
-              />
-            </label>
+            {!exportOnly && (
+              <label
+                className={`ui-primary cursor-pointer ${busy ? "pointer-events-none opacity-50" : ""}`}
+              >
+                Upload file
+                <input
+                  className="sr-only"
+                  type="file"
+                  disabled={busy}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!f) return;
+                    if (files.some((x) => x.path === f.name)) setPending(f);
+                    else upload(f);
+                  }}
+                />
+              </label>
+            )}
           </div>
           {pending && (
             <div className="mb-4 rounded-xl border border-amber-300 p-3 text-sm">
@@ -227,6 +239,7 @@ export function FileManager({
                   >
                     <button
                       className="block w-full truncate text-left text-sm font-medium text-teal-700 dark:text-teal-300"
+                      disabled={exportOnly}
                       onClick={() => show(f.path)}
                       title={f.path}
                     >
@@ -248,19 +261,23 @@ export function FileManager({
                       >
                         Download
                       </a>
-                      <button
-                        disabled={busy}
-                        className="text-rose-600"
-                        onClick={() => setRemove(f.path)}
-                      >
-                        Delete
-                      </button>
+                      {!exportOnly && (
+                        <button
+                          disabled={busy}
+                          className="text-rose-600"
+                          onClick={() => setRemove(f.path)}
+                        >
+                          Delete
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
               {!files.length && (
                 <p className="p-6 text-center text-sm text-zinc-500">
-                  Upload a file or ask the AI to create one.
+                  {exportOnly
+                    ? "No files available for download."
+                    : "Upload a file or ask the AI to create one."}
                 </p>
               )}
             </div>
@@ -281,8 +298,9 @@ export function FileManager({
                 </>
               ) : (
                 <p className="p-6 text-center text-sm text-zinc-500">
-                  Select a file for a safe text preview. Binary files can be
-                  downloaded.
+                  {exportOnly
+                    ? "Download a file to view its contents."
+                    : "Select a file for a safe text preview. Binary files can be downloaded."}
                 </p>
               )}
             </div>
