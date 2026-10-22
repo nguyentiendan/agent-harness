@@ -79,3 +79,43 @@ class StorageTests(unittest.TestCase):
                 1,
             )
         self.rt.client.volumes.create.assert_not_called()
+
+    def test_cancel_before_validate_tombstones_operation(self):
+        from docker.errors import NotFound
+
+        operation = str(uuid.uuid4())
+        self.rt.client.containers.get.side_effect = NotFound("absent")
+        self.rt.release_validation(self.owner, self.sid, operation)
+        with self.assertRaises(RunnerError):
+            self.rt.validate_workspace(self.binding, self.owner, self.sid, operation)
+        self.rt.client.containers.run.assert_not_called()
+
+    def test_failed_probe_cleanup_blocks_scope_until_acknowledged(self):
+        from docker.errors import NotFound
+
+        operation = str(uuid.uuid4())
+        self.rt.client.containers.get.side_effect = RuntimeError("transport lost")
+        with self.assertRaises(RuntimeError):
+            self.rt.release_validation(self.owner, self.sid, operation)
+        with self.assertRaises(RunnerError):
+            self.rt.configure(self.owner, self.sid, self.binding)
+        with self.assertRaises(RunnerError):
+            self.rt.ensure(str(uuid.uuid4()), self.owner, self.sid)
+        self.rt.client.containers.get.side_effect = NotFound("absent")
+        self.rt.release_validation(self.owner, self.sid, operation)
+        self.rt.configure(self.owner, self.sid, self.binding)
+
+    def test_failed_file_helper_cleanup_keeps_scope_busy(self):
+        from app.transfers import helper
+
+        self.rt.configure(self.owner, self.sid, self.binding)
+        container = self.rt.client.containers.run.return_value
+        container.remove.side_effect = RuntimeError("cleanup failed")
+        with self.assertRaises(RuntimeError):
+            with helper(self.rt, self.owner, self.sid, workspace_revision=1):
+                pass
+        with self.assertRaises(RunnerError):
+            self.rt.configure(self.owner, self.sid, dict(self.binding, revision=2))
+        container.remove.side_effect = None
+        self.rt.sweep()
+        self.rt.configure(self.owner, self.sid, dict(self.binding, revision=2))

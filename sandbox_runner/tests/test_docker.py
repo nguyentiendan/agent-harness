@@ -231,7 +231,7 @@ class LocalWorkspaceTests(unittest.TestCase):
                     dict(op="write_file", path="managed.txt", content="original"),
                 )
                 rt.destroy(initial)
-                rt.validate_workspace(binding)
+                rt.validate_workspace(binding, owner, sid, str(uuid.uuid4()))
                 self.assertEqual(list(source.glob(".harness-probe-*")), [])
                 rt.configure(owner, sid, binding)
                 rt.configure(owner, other, binding)  # deliberate same-folder choice

@@ -1,5 +1,6 @@
 """Project-owned storage selection; preflight never changes the active binding."""
 
+import uuid
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import Field
@@ -8,7 +9,7 @@ from .identity import authenticate, owned_project, audit
 from .db import ExecutionScope
 from . import chat, projects
 from app.execution.bindings import validate, snapshot
-from app.execution.lifecycle import check_idle, transfers
+from app.execution.lifecycle import check_idle, transfers, release_validation
 from app.execution.client import RunnerClient, RunnerUnavailable
 from app.execution.operations import run_sync
 
@@ -49,9 +50,13 @@ async def configure(
         old = snapshot(scope)
         if (old["mode"], old["local_path"]) == (desired["mode"], desired["local_path"]):
             return projects.dto(db, p)
+        operation = str(uuid.uuid4())
+        owner = p.owner_id
         transfers.add(pid)
         try:
-            await run_sync(RunnerClient().validate_workspace, desired)
+            await run_sync(
+                RunnerClient().validate_workspace, desired, owner, pid, operation
+            )
             db.expire_all()
             actor, _ = authenticate(db, request.cookies.get(COOKIE))
             if actor.must_change_password:
@@ -79,4 +84,4 @@ async def configure(
                 "Cannot access the folder. Check that it exists on the Docker host, is shared with Docker Desktop, and is readable/writable by sandbox user 10001:10001.",
             )
         finally:
-            transfers.discard(pid)
+            await run_sync(release_validation, owner, pid, operation)

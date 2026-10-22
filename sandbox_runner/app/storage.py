@@ -67,7 +67,7 @@ def profile():
     )
 
 
-def probe_local(client, image, binding, labels=None):
+def probe_local(client, image, binding, labels=None, name=None):
     import time
 
     binding = validate_binding(binding)
@@ -80,6 +80,7 @@ def probe_local(client, image, binding, labels=None):
             image,
             ["python3", "-I", "-c", program],
             detach=True,
+            **({"name": name} if name else {}),
             labels={
                 **(labels or {}),
                 "helper": "true",

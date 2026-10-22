@@ -119,3 +119,56 @@ class ChatModeTests(unittest.TestCase):
             self.assertTrue(
                 chat.chat_dto(db, db.get(Chat, sid))["legacy_files_available"]
             )
+
+    def test_legacy_download_preserves_history_and_scope(self):
+        import httpx
+        from app.platform.db import Event
+
+        self.login()
+        sid = self.new_chat()
+        with DB.begin() as db:
+            db.add(
+                ExecutionScope(
+                    id=sid, owner_id=self.a, standalone_session_id=sid, has_files=True
+                )
+            )
+            db.add(
+                Run(
+                    id="legacy",
+                    session_id=sid,
+                    request_id="legacy",
+                    body_hash="x",
+                    model="fake",
+                    event_offset=0,
+                    status="completed",
+                )
+            )
+            db.flush()
+            chat.append_event(
+                db, sid, "legacy", {"type": "user", "text": "old history"}
+            )
+
+        def connection():
+            return httpx.AsyncClient(
+                base_url="http://runner",
+                transport=httpx.MockTransport(
+                    lambda req: httpx.Response(200, content=b"old file")
+                ),
+            )
+
+        with (
+            patch("app.execution.client.RunnerClient.configure") as configure,
+            patch("app.platform.files.connection", side_effect=connection),
+        ):
+            response = self.client.get(
+                f"/api/sessions/{sid}/files/download?path=old.txt"
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.content, b"old file")
+            self.assertEqual(
+                configure.call_args.args[2],
+                dict(mode="managed", local_path=None, revision=0),
+            )
+        with DB() as db:
+            self.assertEqual(chat.events_for(db, sid)[0]["text"], "old history")
+            self.assertTrue(db.get(ExecutionScope, sid).has_files)

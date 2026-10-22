@@ -1,6 +1,7 @@
 """Bounded binary copies via dedicated helpers, never host workspace paths."""
 
 import time
+import uuid
 import threading
 from contextlib import contextmanager
 from docker.errors import NotFound
@@ -14,7 +15,10 @@ def helper(rt, owner, sid, write=False, workspace_revision=0):
     if not rt.helpers.acquire(blocking=False):
         raise RunnerError("File gateway is busy.")
     container = None
+    helper_name = rt.namespace + "-helper-" + uuid.uuid4().hex
     timer = None
+    registered = False
+    cleaned = False
     try:
         # Serialize against ensure/purge while the helper has access to scope files.
         with rt.lock, rt.db() as db:
@@ -31,10 +35,12 @@ def helper(rt, owner, sid, write=False, workspace_revision=0):
             if binding["mode"] == "managed":
                 rt.managed_volume(owner, sid, create=write)
             rt.active_helpers.add(sid)
+            registered = True
             container = rt.client.containers.run(
                 rt.client.images.get(rt.image).id,
                 ["sleep", "90"],
                 detach=True,
+                name=helper_name,
                 labels={
                     **rt.labels(),
                     "helper": "true",
@@ -57,14 +63,24 @@ def helper(rt, owner, sid, write=False, workspace_revision=0):
         if timer:
             timer.cancel()
         try:
+            if registered and container is None:
+                try:
+                    container = rt.client.containers.get(helper_name)
+                except NotFound:
+                    pass
             if container:
                 try:
                     container.remove(force=True)
                 except NotFound:
                     pass
+            cleaned = True
         finally:
             with rt.lock:
-                rt.active_helpers.discard(sid)
+                if registered:
+                    if cleaned:
+                        rt.active_helpers.discard(sid)
+                    else:
+                        rt.pending_helpers[sid] = helper_name
             rt.helpers.release()
 
 

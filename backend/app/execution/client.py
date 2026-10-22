@@ -66,8 +66,24 @@ class RunnerClient:
     def purge(self, owner, sid):
         return self.call("POST", "/scopes/purge", {"owner_id": owner, "scope_id": sid})
 
-    def validate_workspace(self, binding):
-        return self.call("POST", "/workspaces/validate", binding)
+    def validate_workspace(self, binding, owner, sid, operation):
+        return self.call(
+            "POST",
+            "/workspaces/validate",
+            {
+                "binding": binding,
+                "owner_id": owner,
+                "scope_id": sid,
+                "operation_id": operation,
+            },
+        )
+
+    def release_validation(self, owner, sid, operation):
+        return self.call(
+            "POST",
+            "/workspaces/release",
+            {"owner_id": owner, "scope_id": sid, "operation_id": operation},
+        )
 
     def configure(self, owner, sid, binding):
         return self.call(

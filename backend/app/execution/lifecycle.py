@@ -11,6 +11,7 @@ cleanup_lock = threading.RLock()
 
 # Single-worker file transfers share admission with runs and deletion.
 transfers = set()
+pending_validations = {}
 
 
 def scope_id(chat):
@@ -115,7 +116,20 @@ def settle(rid, status, reason=""):
         return True
 
 
+def release_validation(owner, sid, operation):
+    try:
+        client.RunnerClient().release_validation(owner, sid, operation)
+    except Exception:
+        pending_validations[operation] = (owner, sid)
+        return False
+    pending_validations.pop(operation, None)
+    transfers.discard(sid)
+    return True
+
+
 def retry_pending():
+    for operation, (owner, sid) in list(pending_validations.items()):
+        release_validation(owner, sid, operation)
     with DB() as db:
         pending = [
             (l.run_id, l.terminal_status, l.terminal_reason)

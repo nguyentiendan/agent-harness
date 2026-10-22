@@ -40,6 +40,14 @@ class Configure(Scope):
     binding: WorkspaceBinding
 
 
+class Validation(Configure):
+    operation_id: UUID
+
+
+class ValidationRelease(Scope):
+    operation_id: UUID
+
+
 class Tool(BaseModel):
     model_config = ConfigDict(extra="forbid")
     op: Literal["bash", "read_file", "write_file", "edit_file", "list_dir"]
@@ -139,8 +147,24 @@ def files(body: FileRequest):
 
 
 @app.post("/workspaces/validate")
-def validate_workspace(body: WorkspaceBinding):
-    return safe(runtime.validate_workspace, body.model_dump())
+def validate_workspace(body: Validation):
+    return safe(
+        runtime.validate_workspace,
+        body.binding.model_dump(),
+        str(body.owner_id),
+        str(body.scope_id),
+        str(body.operation_id),
+    )
+
+
+@app.post("/workspaces/release")
+def release_validation(body: ValidationRelease):
+    return safe(
+        runtime.release_validation,
+        str(body.owner_id),
+        str(body.scope_id),
+        str(body.operation_id),
+    )
 
 
 @app.post("/scopes/configure")

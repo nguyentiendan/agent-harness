@@ -36,6 +36,7 @@ class Runtime:
         self.lock = threading.RLock()
         self.busy = set()
         self.active_helpers = set()
+        self.pending_helpers = {}
         self.helpers = threading.BoundedSemaphore(2)
         with self.db() as db:
             db.execute(
@@ -45,6 +46,9 @@ class Runtime:
                 "CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, scope TEXT, owner TEXT, closed INTEGER NOT NULL, expires REAL NOT NULL)"
             )
 
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS probes (id TEXT PRIMARY KEY, owner TEXT NOT NULL, scope TEXT NOT NULL, closed INTEGER NOT NULL DEFAULT 0)"
+            )
             for table, columns in {
                 "scopes": {
                     "mode": "TEXT NOT NULL DEFAULT 'managed'",
@@ -99,16 +103,87 @@ class Runtime:
             ),
         }
 
-    def validate_workspace(self, binding):
+    def validate_workspace(self, binding, owner=None, sid=None, operation=None):
+        if not owner or not sid or not operation:
+            raise RunnerError("Scoped validation is required.")
+        identifier(owner)
+        identifier(sid)
+        identifier(operation)
+        binding = validate_binding(binding)
         if not self.helpers.acquire(blocking=False):
             raise RunnerError("File gateway is busy.")
         try:
-            return probe_local(self.client, self.image, binding, self.labels())
+            with self.lock:
+                with self.db() as db:
+                    if db.execute(
+                        "SELECT id FROM probes WHERE id=?", (operation,)
+                    ).fetchone():
+                        raise RunnerError("Validation already completed or cancelled.")
+                    self.check_probe_idle(db, sid)
+                    row = db.execute(
+                        "SELECT owner,deleted FROM scopes WHERE id=?", (sid,)
+                    ).fetchone()
+                    if row and (row[0] != owner or row[1]):
+                        raise RunnerError("Scope unavailable.")
+                    if (
+                        sid in self.active_helpers
+                        or db.execute(
+                            "SELECT id FROM runs WHERE scope=? AND closed=0", (sid,)
+                        ).fetchone()
+                    ):
+                        raise RunnerError("Scope busy.")
+                    db.execute(
+                        "INSERT INTO probes(id,owner,scope) VALUES(?,?,?)",
+                        (operation, owner, sid),
+                    )
+                try:
+                    return probe_local(
+                        self.client,
+                        self.image,
+                        binding,
+                        self.labels(),
+                        self.namespace + "-probe-" + operation,
+                    )
+                finally:
+                    self.release_validation(owner, sid, operation)
         finally:
             self.helpers.release()
 
+    def check_probe_idle(self, db, sid):
+        if db.execute(
+            "SELECT id FROM probes WHERE scope=? AND closed=0", (sid,)
+        ).fetchone():
+            raise RunnerError("Workspace validation cleanup is pending.")
+
+    def release_validation(self, owner, sid, operation):
+        identifier(owner)
+        identifier(sid)
+        identifier(operation)
+        with self.lock, self.db() as db:
+            row = db.execute(
+                "SELECT owner,scope FROM probes WHERE id=?", (operation,)
+            ).fetchone()
+            if row and row != (owner, sid):
+                raise RunnerError("Validation ownership mismatch.")
+            # A cancellation arriving before validate is a tombstone for that operation.
+            db.execute(
+                "INSERT INTO probes(id,owner,scope) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING",
+                (operation, owner, sid),
+            )
+            db.commit()
+            try:
+                c = self.client.containers.get(self.namespace + "-probe-" + operation)
+                if c.labels.get("harness.runner") != self.namespace:
+                    raise RunnerError("Container ownership mismatch.")
+                c.remove(force=True)
+            except NotFound:
+                pass
+            db.execute("UPDATE probes SET closed=1 WHERE id=?", (operation,))
+        return {"removed": True}
+
     def _binding(self, db, owner, sid, revision):
         self.scope(db, owner, sid)
+        self.check_probe_idle(db, sid)
         row = db.execute(
             "SELECT mode,local_path,revision FROM scopes WHERE id=?", (sid,)
         ).fetchone()
@@ -124,6 +199,7 @@ class Runtime:
         binding = validate_binding(binding)
         with self.lock, self.db() as db:
             self.scope(db, owner, sid)
+            self.check_probe_idle(db, sid)
             row = db.execute(
                 "SELECT mode,local_path,revision FROM scopes WHERE id=?", (sid,)
             ).fetchone()
@@ -313,6 +389,7 @@ class Runtime:
         with self.lock, self.db() as db:
             identifier(owner)
             identifier(sid)
+            self.check_probe_idle(db, sid)
             row = db.execute("SELECT owner FROM scopes WHERE id=?", (sid,)).fetchone()
             if row and row[0] != owner:
                 raise RunnerError("Scope ownership mismatch.")
@@ -356,3 +433,18 @@ class Runtime:
                         c.remove(force=True)
                     except NotFound:
                         pass
+
+        with self.lock:
+            for sid, name in list(self.pending_helpers.items()):
+                try:
+                    self.client.containers.get(name).remove(force=True)
+                except NotFound:
+                    pass
+                self.pending_helpers.pop(sid, None)
+                self.active_helpers.discard(sid)
+        with self.db() as db:
+            probes = db.execute(
+                "SELECT owner,scope,id FROM probes WHERE closed=0"
+            ).fetchall()
+        for owner, sid, operation in probes:
+            self.release_validation(owner, sid, operation)

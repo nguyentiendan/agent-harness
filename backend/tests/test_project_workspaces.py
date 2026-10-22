@@ -7,7 +7,15 @@ from app.execution.lifecycle import transfers
 
 
 class WorkspaceTests(unittest.TestCase):
-    setUp = auth_tests.PlatformTests.setUp
+    def setUp(self):
+        auth_tests.PlatformTests.setUp(self)
+        cleanup = patch(
+            "app.execution.client.RunnerClient.release_validation",
+            return_value={"removed": True},
+        )
+        cleanup.start()
+        self.addCleanup(cleanup.stop)
+
     login = auth_tests.PlatformTests.login
 
     def create(self):
@@ -80,3 +88,80 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(self.put(pid).status_code, 404)
         self.login("admin", "Admin password 123!")
         self.assertEqual(self.put(pid).status_code, 403)
+
+    def test_uncertain_probe_cleanup_keeps_project_reserved(self):
+        from app.execution.lifecycle import retry_pending
+
+        self.login()
+        pid = self.create()
+        with (
+            patch(
+                "app.execution.client.RunnerClient.validate_workspace",
+                side_effect=RunnerUnavailable("disconnected"),
+            ),
+            patch(
+                "app.execution.client.RunnerClient.release_validation",
+                side_effect=RunnerUnavailable("cleanup not confirmed"),
+                create=True,
+            ),
+        ):
+            self.assertEqual(self.put(pid).status_code, 503)
+            self.assertIn(pid, transfers)
+            self.assertEqual(self.put(pid).status_code, 409)
+            self.assertEqual(
+                self.client.get(f"/api/projects/{pid}").json()["workspace"]["revision"],
+                0,
+            )
+        with patch(
+            "app.execution.client.RunnerClient.release_validation",
+            return_value={"removed": True},
+            create=True,
+        ):
+            retry_pending()
+        self.assertNotIn(pid, transfers)
+
+    def test_cancelled_endpoint_waits_for_probe_and_keeps_old_binding(self):
+        import asyncio
+        import threading
+        from types import SimpleNamespace
+        from app.platform.workspaces import configure, WorkspaceInput
+        from app.platform.db import DB
+
+        self.login()
+        pid = self.create()
+        entered, finish = threading.Event(), threading.Event()
+
+        def probe(*args):
+            entered.set()
+            self.assertTrue(finish.wait(2))
+            return {"ready": True}
+
+        async def exercise():
+            with DB.begin() as db:
+                task = asyncio.create_task(
+                    configure(
+                        pid,
+                        WorkspaceInput(
+                            mode="local", local_path="/host/demo", expected_revision=0
+                        ),
+                        SimpleNamespace(cookies=dict(self.client.cookies)),
+                        (db, None, None),
+                    )
+                )
+                self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+                task.cancel()
+                await asyncio.sleep(0.01)
+                self.assertIn(pid, transfers)
+                self.assertFalse(task.done())
+                finish.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+
+        with patch(
+            "app.execution.client.RunnerClient.validate_workspace", side_effect=probe
+        ):
+            asyncio.run(exercise())
+        self.assertNotIn(pid, transfers)
+        self.assertEqual(
+            self.client.get(f"/api/projects/{pid}").json()["workspace"]["revision"], 0
+        )
