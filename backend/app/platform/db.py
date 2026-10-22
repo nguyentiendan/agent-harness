@@ -74,6 +74,7 @@ class Run(Base):
     body_hash: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(20), default="running")
     model: Mapped[str] = mapped_column(String(120))
+    workspace_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     concurrency_cap: Mapped[int] = mapped_column(Integer, default=1)
     event_offset: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[float] = mapped_column(Float, default=time.time)
@@ -113,6 +114,11 @@ class ExecutionScope(Base):
             "(project_id IS NULL) != (standalone_session_id IS NULL)",
             name="scope_exactly_one_parent",
         ),
+        CheckConstraint("workspace_revision >= 0", name="workspace_revision_positive"),
+        CheckConstraint(
+            "(workspace_mode = 'managed' AND local_path IS NULL) OR (workspace_mode = 'local' AND local_path LIKE '/%')",
+            name="workspace_mode_path",
+        ),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     project_id: Mapped[str | None] = mapped_column(
@@ -122,6 +128,13 @@ class ExecutionScope(Base):
         ForeignKey("sessions.id"), nullable=True, unique=True
     )
     owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    workspace_mode: Mapped[str] = mapped_column(
+        String(10), default="managed", server_default="managed"
+    )
+    local_path: Mapped[str | None] = mapped_column(String(4096), nullable=True)
+    workspace_revision: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
     has_files: Mapped[bool] = mapped_column(Boolean, default=False)
 
 

@@ -25,6 +25,8 @@ class ProjectUpdate(Input):
 
 
 def dto(db, p):
+    from app.execution.bindings import snapshot
+
     return dict(
         id=p.id,
         owner_id=p.owner_id,
@@ -32,6 +34,7 @@ def dto(db, p):
         name=p.name,
         instructions=p.instructions,
         created_at=p.created_at,
+        workspace=snapshot(db.get(ExecutionScope, p.id)),
     )
 
 
