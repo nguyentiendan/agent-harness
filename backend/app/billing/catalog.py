@@ -38,6 +38,9 @@ def normalize(item):
             return None
         if mid.endswith((":batch", ":online")):
             return None  # Not a synchronous, search-free chat route.
+        gemini = mid.startswith("google/gemini-")
+        if gemini and arch.get("output_modalities") != ["text"]:
+            return None
         pricing = item["pricing"]
         base = {k: v for k, v in pricing.items() if k != "overrides"}
         # Read required token rates even if an override supplies them later.
@@ -68,6 +71,13 @@ def normalize(item):
             "input_cache_write",
             "input_cache_write_1h",
         }
+        optional_fees = {"web_search"} if mid.startswith("anthropic/") else set()
+        if gemini:
+            # The platform sends text/function tools, not image/audio/search inputs.
+            optional_fees = {"web_search", "image", "audio", "input_audio_cache"}
+        output_fields = (
+            {"completion", "internal_reasoning"} if gemini else {"completion"}
+        )
         input_rates, output_rates, all_prices = [], [], []
         for tier in tiers:
             prices = {k: Decimal(str(v)) for k, v in tier.items()}
@@ -75,14 +85,14 @@ def normalize(item):
                 return None
             for key, value in prices.items():
                 if key not in token_fields and value != 0:
-                    # Claude search is opt-in; our payload sends function tools only,
-                    # without server search tools, plugins or :online suffixes.
-                    if not (mid.startswith("anthropic/") and key == "web_search"):
+                    if key not in optional_fees and key not in output_fields:
                         return None
             input_rates.extend(
                 v for k, v in prices.items() if k in token_fields and k != "completion"
             )
-            output_rates.append(prices["completion"])
+            # Thinking tokens consume the output budget; reserve at the higher
+            # output rate rather than ignoring reasoning or charging it twice.
+            output_rates.extend(v for k, v in prices.items() if k in output_fields)
             all_prices.extend(prices.values())
         input_price, b = max(input_rates), max(output_rates)
         if max(input_price, b) > 1:

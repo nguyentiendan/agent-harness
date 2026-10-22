@@ -189,3 +189,61 @@ class ClaudePricingTests(unittest.TestCase):
             data = self.claude()
             data["id"] += suffix
             self.assertIsNone(normalize(data))
+
+
+class GeminiPricingTests(unittest.TestCase):
+    def gemini(self, **pricing):
+        return model(
+            id="google/gemini-2.5-pro",
+            pricing={
+                "prompt": "0.00000125",
+                "completion": "0.00001",
+                "internal_reasoning": "0.00001",
+                "image": "0.00000125",
+                "audio": "0.00000125",
+                "input_audio_cache": "0.000000125",
+                "web_search": "0.014",
+                **pricing,
+            },
+        )
+
+    def test_text_gemini_ignores_unused_modalities_but_bounds_reasoning(self):
+        item = normalize(self.gemini(internal_reasoning="0.00002"))
+        self.assertIsNotNone(item)
+        self.assertEqual(item["price_class"], "paid")
+        self.assertEqual(item["input_price"], "0.00000125")
+        self.assertEqual(item["output_price"], "0.00002")
+
+    def test_gemini_context_tier_includes_output_and_reasoning(self):
+        item = normalize(
+            self.gemini(
+                overrides=[
+                    {
+                        "min_prompt_tokens": 200000,
+                        "prompt": "0.0000025",
+                        "completion": "0.000015",
+                        "audio": "0.0000025",
+                    }
+                ]
+            )
+        )
+        self.assertIsNotNone(item)
+        self.assertEqual(item["input_price"], "0.0000025")
+        self.assertEqual(item["output_price"], "0.000015")
+
+    def test_gemini_image_output_and_unknown_fees_stay_excluded(self):
+        for data in (
+            self.gemini(image_output=".01"),
+            self.gemini(unknown_fee=".01"),
+            self.gemini(internal_reasoning="NaN"),
+            self.gemini(audio="-1"),
+        ):
+            self.assertIsNone(normalize(data))
+        data = self.gemini()
+        data["architecture"]["output_modalities"] = ["text", "image"]
+        self.assertIsNone(normalize(data))
+
+    def test_optional_fees_do_not_make_gemini_free(self):
+        data = self.gemini(prompt="0", completion="0", internal_reasoning="0")
+        data["id"] = "google/gemini-example:free"
+        self.assertIsNone(normalize(data))
