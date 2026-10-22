@@ -11,6 +11,8 @@ from .auth import context, COOKIE
 from .identity import owned_chat, owned_project, authenticate
 from .db import DB, ExecutionScope
 from . import chat
+from app.execution.bindings import snapshot, sync
+from app.execution.operations import run_sync, finish_on_cancel
 from app.execution.lifecycle import scope_for_chat, check_idle, transfers
 from app.execution.client import RunnerClient, RunnerUnavailable
 
@@ -62,33 +64,46 @@ def response_ok(r):
 @router.get("/api/sessions/{sid}/files")
 @router.get("/api/projects/{pid}/files")
 async def list_project(request: Request, ctx=Depends(context)):
-    scope = target(request, ctx, "list")
-    ctx[0].commit()
-    try:
-        result = await asyncio.to_thread(
-            RunnerClient().files, scope.owner_id, scope.id, "list_dir"
-        )
-        if "error" in result:
-            raise HTTPException(409, result["error"])
-        return result
-    except RunnerUnavailable:
-        raise HTTPException(503, "File gateway unavailable.")
+    return await read_operation(request, ctx, "list", "list_dir", "")
 
 
 @router.get("/api/sessions/{sid}/read")
 @router.get("/api/projects/{pid}/read")
 async def read_project(request: Request, path: str, ctx=Depends(context)):
-    scope = target(request, ctx)
-    ctx[0].commit()
+    return await read_operation(request, ctx, "read", "read_file", path)
+
+
+async def read_operation(request, ctx, action, op, path):
+    scope = await reserve(request, ctx, action)
     try:
-        result = await asyncio.to_thread(
-            RunnerClient().files, scope.owner_id, scope.id, "read_file", path
+        await sync_scope(scope)
+        result = await run_sync(
+            RunnerClient().files,
+            scope.owner_id,
+            scope.id,
+            op,
+            path,
+            scope.workspace_revision,
         )
         if "error" in result:
             raise HTTPException(409, result["error"])
         return result
     except RunnerUnavailable:
-        raise HTTPException(503, "File gateway unavailable.")
+        raise HTTPException(
+            503,
+            "File gateway unavailable. Check the active workspace folder and retry.",
+        )
+    finally:
+        transfers.discard(scope.id)
+
+
+async def sync_scope(scope):
+    try:
+        await run_sync(sync, scope.owner_id, scope.id, snapshot(scope))
+    except RunnerUnavailable:
+        raise HTTPException(
+            503, "Workspace unavailable. Refresh and check the connected folder."
+        )
 
 
 async def reserve(request, ctx, action):
@@ -133,6 +148,7 @@ async def upload(
                         raise HTTPException(
                             403, "Change your temporary password first."
                         )
+                await sync_scope(scope)
                 source.seek(0)
 
                 async def body():
@@ -140,14 +156,17 @@ async def upload(
                         yield chunk
 
                 async with connection() as client:
-                    r = await client.post(
-                        "/transfer/upload",
-                        params={
-                            "owner_id": scope.owner_id,
-                            "scope_id": scope.id,
-                            "path": path,
-                        },
-                        content=body(),
+                    r = await finish_on_cancel(
+                        client.post(
+                            "/transfer/upload",
+                            params={
+                                "owner_id": scope.owner_id,
+                                "scope_id": scope.id,
+                                "workspace_revision": scope.workspace_revision,
+                                "path": path,
+                            },
+                            content=body(),
+                        )
                     )
                 response_ok(r)
                 return r.json()
@@ -168,15 +187,26 @@ async def download(
     client = None
     r = None
     try:
+        await sync_scope(scope)
         client = connection()
-        r = await client.send(
-            client.build_request(
-                "GET",
-                "/transfer/download",
-                params={"owner_id": scope.owner_id, "scope_id": scope.id, "path": path},
-            ),
-            stream=True,
-        )
+
+        async def receive():
+            nonlocal r
+            r = await client.send(
+                client.build_request(
+                    "GET",
+                    "/transfer/download",
+                    params={
+                        "owner_id": scope.owner_id,
+                        "scope_id": scope.id,
+                        "workspace_revision": scope.workspace_revision,
+                        "path": path,
+                    },
+                ),
+                stream=True,
+            )
+
+        await finish_on_cancel(receive())
         response_ok(r)
         length = int(r.headers.get("content-length", LIMIT + 1))
         if length > LIMIT:
@@ -224,10 +254,18 @@ async def delete_file(
 ):
     scope = await reserve(request, ctx, "delete_file")
     try:
+        await sync_scope(scope)
         async with connection() as client:
-            r = await client.delete(
-                "/transfer/file",
-                params={"owner_id": scope.owner_id, "scope_id": scope.id, "path": path},
+            r = await finish_on_cancel(
+                client.delete(
+                    "/transfer/file",
+                    params={
+                        "owner_id": scope.owner_id,
+                        "scope_id": scope.id,
+                        "workspace_revision": scope.workspace_revision,
+                        "path": path,
+                    },
+                )
             )
         response_ok(r)
         return r.json()

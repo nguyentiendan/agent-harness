@@ -103,8 +103,11 @@ class ChatModeTests(unittest.TestCase):
                     id=sid, owner_id=self.a, standalone_session_id=sid, has_files=True
                 )
             )
-        with patch(
-            "app.execution.client.RunnerClient.files", return_value={"files": []}
+        with (
+            patch(
+                "app.execution.client.RunnerClient.files", return_value={"files": []}
+            ),
+            patch("app.execution.client.RunnerClient.configure"),
         ):
             self.assertEqual(
                 self.client.get(f"/api/sessions/{sid}/files").status_code, 200

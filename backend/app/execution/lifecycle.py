@@ -45,6 +45,10 @@ def acquire(db, run):
     if not chat.project_id:
         return {"owner_id": chat.owner_id, "scope_id": chat.id, "run_id": run.id}
     scope = scope_for_chat(db, chat)
+    from .bindings import snapshot
+
+    if run.workspace_snapshot is None:
+        run.workspace_snapshot = snapshot(scope)
     if scope.id in transfers:
         raise HTTPException(409, "A file transfer is in progress. Please retry.")
     lease = db.get(RunLease, scope.id)
@@ -53,7 +57,12 @@ def acquire(db, run):
     if not lease:
         db.add(RunLease(scope_id=scope.id, run_id=run.id))
         db.flush()
-    return {"owner_id": scope.owner_id, "scope_id": scope.id, "run_id": run.id}
+    return {
+        "owner_id": scope.owner_id,
+        "scope_id": scope.id,
+        "run_id": run.id,
+        "workspace_revision": run.workspace_snapshot["revision"],
+    }
 
 
 def prepare(rid):
@@ -66,6 +75,7 @@ def prepare(rid):
             if not db.get(Chat, run.session_id).project_id:
                 raise RuntimeError("Create or open a Project to work with files.")
             ctx = acquire(db, run)
+            binding = dict(run.workspace_snapshot)
             lease = db.get(RunLease, ctx["scope_id"])
             if lease.terminal_status:
                 raise RuntimeError("Run is stopping.")
@@ -73,6 +83,9 @@ def prepare(rid):
             lease.sandbox_started = True
             db.get(ExecutionScope, ctx["scope_id"]).has_files = True
         if first:
+            from .bindings import sync
+
+            sync(ctx["owner_id"], ctx["scope_id"], binding)
             client.RunnerClient().ensure(ctx)
         return ctx
 

@@ -31,3 +31,9 @@ def snapshot(scope):
             revision=scope.workspace_revision,
         )
     )
+
+
+def sync(owner, sid, binding):
+    from .client import RunnerClient
+
+    RunnerClient().configure(owner, sid, validate(binding))

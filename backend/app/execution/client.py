@@ -37,7 +37,11 @@ class RunnerClient:
         return self.call(
             "POST",
             f"/runs/{ctx['run_id']}/ensure",
-            {"owner_id": ctx["owner_id"], "scope_id": ctx["scope_id"]},
+            {
+                "owner_id": ctx["owner_id"],
+                "scope_id": ctx["scope_id"],
+                "workspace_revision": ctx.get("workspace_revision", 0),
+            },
         )
 
     def execute(self, rid, payload):
@@ -46,11 +50,17 @@ class RunnerClient:
     def destroy(self, rid):
         return self.call("DELETE", f"/runs/{rid}")
 
-    def files(self, owner, sid, op, path=""):
+    def files(self, owner, sid, op, path="", workspace_revision=0):
         return self.call(
             "POST",
             "/files",
-            {"owner_id": owner, "scope_id": sid, "op": op, "path": path},
+            {
+                "owner_id": owner,
+                "scope_id": sid,
+                "op": op,
+                "path": path,
+                "workspace_revision": workspace_revision,
+            },
         )
 
     def purge(self, owner, sid):

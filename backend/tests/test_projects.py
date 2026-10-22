@@ -237,7 +237,10 @@ class ProjectTests(unittest.TestCase):
                 transport=httpx.MockTransport(transport), base_url="http://runner"
             )
 
-        with patch("app.platform.files.connection", side_effect=connection):
+        with (
+            patch("app.platform.files.connection", side_effect=connection),
+            patch("app.execution.client.RunnerClient.configure"),
+        ):
             r = self.client.post(
                 f"/api/projects/{pid}/files/upload?path=a.txt", content=b"hello"
             )
