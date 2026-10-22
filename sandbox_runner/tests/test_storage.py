@@ -70,6 +70,12 @@ class StorageTests(unittest.TestCase):
     def test_missing_source_never_falls_back(self):
         self.rt.configure(self.owner, self.sid, self.binding)
         self.rt.client.containers.run.side_effect = RuntimeError("source missing")
+        rid = str(uuid.uuid4())
         with self.assertRaises(RuntimeError):
-            self.rt.ensure(str(uuid.uuid4()), self.owner, self.sid, 1)
+            self.rt.ensure(rid, self.owner, self.sid, 1)
+        with self.rt.db() as db:
+            self.assertEqual(
+                db.execute("SELECT closed FROM runs WHERE id=?", (rid,)).fetchone()[0],
+                1,
+            )
         self.rt.client.volumes.create.assert_not_called()

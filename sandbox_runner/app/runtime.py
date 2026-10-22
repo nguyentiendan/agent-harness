@@ -214,6 +214,7 @@ class Runtime:
                 )
             except Exception:
                 db.execute("UPDATE runs SET closed=1 WHERE id=?", (rid,))
+                db.commit()  # Keep failure tombstone even when the outer transaction rolls back.
                 raise
             return {"ready": True}
 

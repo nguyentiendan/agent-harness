@@ -187,3 +187,118 @@ class DockerIsolationTests(unittest.TestCase):
             source.truncate(25 * 1024 * 1024 + 1)
             with self.assertRaises(RunnerError):
                 transfers.upload(self.rt, self.owner, self.scope, "too-big.bin", source)
+
+
+@unittest.skipUnless(
+    os.environ.get("RUN_DOCKER_TESTS") == "1", "Docker integration is opt-in"
+)
+class LocalWorkspaceTests(unittest.TestCase):
+    def test_host_folder_lifecycle(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        import io
+        from app.runtime import Runtime, RunnerError
+        from app import transfers
+
+        root = os.environ.get("HOST_TEST_ROOT")
+        if not root or not Path(root).is_dir():
+            self.fail(
+                "HOST_TEST_ROOT must name an explicit disposable host test directory"
+            )
+        with (
+            tempfile.TemporaryDirectory(prefix="local folder ", dir=root) as folder,
+            tempfile.TemporaryDirectory() as state,
+        ):
+            source = Path(folder)
+            sentinel = source / "sentinel.txt"
+            sentinel.write_text("keep")
+            # Only this disposable fixture is made writable to the sandbox UID.
+            source.chmod(0o777)
+            sentinel.chmod(0o666)
+            namespace = "harness-test-" + uuid.uuid4().hex[:10]
+            with patch.dict(
+                os.environ, {"RUNNER_DB": state + "/db", "RUNNER_NAMESPACE": namespace}
+            ):
+                rt = Runtime()
+            owner, sid, other = (str(uuid.uuid4()) for _ in range(3))
+            binding = dict(mode="local", local_path=folder, revision=1)
+            try:
+                # Preserve the managed volume when switching to and from a local folder.
+                initial = str(uuid.uuid4())
+                rt.ensure(initial, owner, sid)
+                rt.execute(
+                    initial,
+                    dict(op="write_file", path="managed.txt", content="original"),
+                )
+                rt.destroy(initial)
+                rt.validate_workspace(binding)
+                self.assertEqual(list(source.glob(".harness-probe-*")), [])
+                rt.configure(owner, sid, binding)
+                rt.configure(owner, other, binding)  # deliberate same-folder choice
+                rid = str(uuid.uuid4())
+                rt.ensure(rid, owner, sid, 1)
+                result = rt.execute(
+                    rid, dict(op="write_file", path="agent.txt", content="local")
+                )
+                self.assertNotIn("error", result)
+                self.assertEqual((source / "agent.txt").read_text(), "local")
+                with self.assertRaises(RunnerError):
+                    rt.configure(
+                        owner, sid, dict(mode="managed", local_path=None, revision=2)
+                    )
+                rt.destroy(rid)
+                transfers.upload(
+                    rt, owner, sid, "upload.bin", io.BytesIO(b"\x00demo"), 1
+                )
+                out = io.BytesIO()
+                transfers.download(rt, owner, other, "upload.bin", out, 1)
+                self.assertEqual(out.read(), b"\x00demo")
+                transfers.delete(rt, owner, sid, "upload.bin", 1)
+                self.assertFalse((source / "upload.bin").exists())
+                rt.configure(
+                    owner, sid, dict(mode="managed", local_path=None, revision=2)
+                )
+                self.assertEqual(
+                    rt.files(owner, sid, dict(op="read_file", path="managed.txt"), 2)[
+                        "content"
+                    ],
+                    "original",
+                )
+                with self.assertRaises(RunnerError):
+                    rt.files(owner, sid, dict(op="list_dir"), 1)
+                rt.configure(owner, sid, dict(binding, revision=3))
+                rid = str(uuid.uuid4())
+                rt.ensure(rid, owner, sid, 3)
+                self.assertTrue(
+                    rt.execute(rid, dict(op="bash", command="sleep 30", timeout=1))[
+                        "timed_out"
+                    ]
+                )
+                rid = str(uuid.uuid4())
+                rt.ensure(rid, owner, sid, 3)
+                rt.sweep(True)
+                self.assertEqual(sentinel.read_text(), "keep")
+                (source / "escape").symlink_to("/etc/passwd")
+                self.assertIn(
+                    "error",
+                    rt.files(owner, sid, dict(op="read_file", path="escape"), 3),
+                )
+                moved = source.with_name(source.name + " moved")
+                source.rename(moved)
+                try:
+                    with self.assertRaises(Exception):
+                        rt.ensure(str(uuid.uuid4()), owner, sid, 3)
+                    self.assertFalse(source.exists())
+                finally:
+                    moved.rename(source)
+                rt.purge(owner, sid)
+                rt.purge(owner, other)
+                self.assertEqual(sentinel.read_text(), "keep")
+                self.assertTrue((source / "agent.txt").exists())
+            finally:
+                rt.sweep(True)
+                for v in rt.client.volumes.list(
+                    filters={"label": f"harness.runner={namespace}"}
+                ):
+                    v.remove()
+                rt.client.close()
