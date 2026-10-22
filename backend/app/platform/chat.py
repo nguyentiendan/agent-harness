@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from app.config import load_config
 from app.integrations.llm import LiteLLMClientWrapper
 from app.security.redaction import redact_text
-from .db import DB, Chat, Event, Run, User, Project
+from .db import DB, Chat, Event, Run, User, Project, ExecutionScope
 from .identity import digest
 
 running: dict[str, asyncio.Task] = {}
@@ -65,6 +65,12 @@ def chat_dto(db, c):
         "created_at": c.created_at,
         "updated_at": c.updated_at,
         "workspace": "",
+        "execution_mode": "project" if c.project_id else "chat",
+        "legacy_files_available": bool(
+            not c.project_id
+            and (scope := db.get(ExecutionScope, c.id))
+            and scope.has_files
+        ),
     }
 
 
@@ -109,7 +115,7 @@ async def execute(rid):
         llm = LiteLLMClientWrapper(default_model=model, user_id=c.owner_id, run_id=rid)
         from app.execution import client, agent, lifecycle
 
-        if client.enabled():
+        if project and client.enabled():
 
             def emit(event):
                 with DB.begin() as db:
@@ -124,7 +130,7 @@ async def execute(rid):
                     [
                         {
                             "role": "system",
-                            "content": "You are a helpful text-only assistant. You cannot execute tools or access files.",
+                            "content": "You are a text-only assistant. You may answer questions, explain code and provide code examples. You cannot execute commands or create, read, edit or delete files. For those actions, tell the user to create or open a Project. Never claim to have performed file actions.",
                         },
                         *history,
                     ],
@@ -139,8 +145,12 @@ async def execute(rid):
                     rid,
                     {
                         "type": "assistant",
-                        "text": response.choices[0].message.content
-                        or "No text response was returned.",
+                        "text": (
+                            "Create or open a Project to execute commands or work with files."
+                            if getattr(response.choices[0].message, "tool_calls", None)
+                            else response.choices[0].message.content
+                            or "No text response was returned."
+                        ),
                     },
                 )
         status, reason = "completed", ""

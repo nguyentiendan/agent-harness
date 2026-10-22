@@ -42,6 +42,8 @@ def check_idle(db, sid):
 
 def acquire(db, run):
     chat = db.get(Chat, run.session_id)
+    if not chat.project_id:
+        return {"owner_id": chat.owner_id, "scope_id": chat.id, "run_id": run.id}
     scope = scope_for_chat(db, chat)
     if scope.id in transfers:
         raise HTTPException(409, "A file transfer is in progress. Please retry.")
@@ -61,6 +63,8 @@ def prepare(rid):
             run = db.get(Run, rid)
             if not run or run.status != "running":
                 raise RuntimeError("Run is no longer active.")
+            if not db.get(Chat, run.session_id).project_id:
+                raise RuntimeError("Create or open a Project to work with files.")
             ctx = acquire(db, run)
             lease = db.get(RunLease, ctx["scope_id"])
             if lease.terminal_status:

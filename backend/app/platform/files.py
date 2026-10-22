@@ -30,6 +30,11 @@ def target(request, ctx, action="read"):
             db.flush()
         return scope
     c = owned_chat(db, user, request.path_params["sid"], action)
+    if not c.project_id:
+        scope = db.get(ExecutionScope, c.id)
+        if action not in ("list", "download") or not scope or not scope.has_files:
+            raise HTTPException(403, "Create or open a Project to work with files.")
+        return scope
     return scope_for_chat(db, c)
 
 
@@ -57,7 +62,7 @@ def response_ok(r):
 @router.get("/api/sessions/{sid}/files")
 @router.get("/api/projects/{pid}/files")
 async def list_project(request: Request, ctx=Depends(context)):
-    scope = target(request, ctx)
+    scope = target(request, ctx, "list")
     ctx[0].commit()
     try:
         result = await asyncio.to_thread(

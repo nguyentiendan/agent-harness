@@ -4,7 +4,7 @@ import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, AsyncMock
-from app.platform.db import DB, Base, engine, Chat, Run
+from app.platform.db import DB, Base, engine, Chat, Run, Project
 from app.platform.identity import create_user
 from app.platform import chat
 
@@ -18,10 +18,19 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
                 db, "sandboxuser", "Sandbox password 123!", "user", False
             )["id"]
             db.add(
+                Project(
+                    id="00000000-0000-0000-0000-000000000001",
+                    owner_id=owner,
+                    name="tools",
+                )
+            )
+            db.flush()
+            db.add(
                 Chat(
                     id="00000000-0000-0000-0000-000000000001",
                     owner_id=owner,
                     title="tools",
+                    project_id="00000000-0000-0000-0000-000000000001",
                     status="running",
                 )
             )
@@ -136,6 +145,7 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
             settle(self.rid, "completed")
             with DB.begin() as db:
                 db.get(Chat, "00000000-0000-0000-0000-000000000001").deleted_at = 1
+                db.get(Project, "00000000-0000-0000-0000-000000000001").deleted_at = 1
             with patch.dict(os.environ, {"SANDBOX_ENABLED": "false"}):
                 self.assertEqual(purge(), 1)
         runner.purge.assert_called_once()

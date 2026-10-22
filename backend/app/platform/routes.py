@@ -74,9 +74,11 @@ async def create(body: NewChat, request: Request, ctx=Depends(context)):
         db.flush()
         from app.execution.lifecycle import scope_for_chat
 
-        scope_for_chat(db, c)
+        if c.project_id:
+            scope_for_chat(db, c)
+        result = chat.chat_dto(db, c)
         db.commit()
-        return chat.chat_dto(db, c)
+        return result
 
 
 @router.get("/api/sessions")
