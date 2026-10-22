@@ -36,19 +36,57 @@ def normalize(item):
             or "tools" not in item.get("supported_parameters", [])
         ):
             return None
+        if mid.endswith((":batch", ":online")):
+            return None  # Not a synchronous, search-free chat route.
         pricing = item["pricing"]
-        a, b = Decimal(pricing["prompt"]), Decimal(pricing["completion"])
-        all_prices = [Decimal(str(v)) for v in pricing.values()]
-        if any(not v.is_finite() or v < 0 for v in all_prices):
+        base = {k: v for k, v in pricing.items() if k != "overrides"}
+        # Read required token rates even if an override supplies them later.
+        Decimal(str(base["prompt"]))
+        Decimal(str(base["completion"]))
+        overrides = pricing.get("overrides", [])
+        if not isinstance(overrides, list):
             return None
-        # V1 only handles token pricing; nonzero request/search/image surcharges excluded.
-        if any(
-            Decimal(str(v)) != 0
-            for k, v in pricing.items()
-            if k
-            not in ("prompt", "completion", "input_cache_read", "input_cache_write")
-        ):
-            return None
+        tiers = [base]
+        for override in overrides:
+            if not isinstance(override, dict):
+                return None
+            threshold = override.get("min_prompt_tokens")
+            if (
+                isinstance(threshold, bool)
+                or not isinstance(threshold, int)
+                or threshold < 0
+            ):
+                return None
+            rates = {k: v for k, v in override.items() if k != "min_prompt_tokens"}
+            if not rates:
+                return None
+            tiers.append({**base, **rates})
+        token_fields = {
+            "prompt",
+            "completion",
+            "input_cache_read",
+            "input_cache_write",
+            "input_cache_write_1h",
+        }
+        input_rates, output_rates, all_prices = [], [], []
+        for tier in tiers:
+            prices = {k: Decimal(str(v)) for k, v in tier.items()}
+            if any(not v.is_finite() or v < 0 for v in prices.values()):
+                return None
+            for key, value in prices.items():
+                if key not in token_fields and value != 0:
+                    # Claude search is opt-in; our payload sends function tools only,
+                    # without server search tools, plugins or :online suffixes.
+                    if not (mid.startswith("anthropic/") and key == "web_search"):
+                        return None
+            input_rates.extend(
+                v for k, v in prices.items() if k in token_fields and k != "completion"
+            )
+            output_rates.append(prices["completion"])
+            all_prices.extend(prices.values())
+        input_price, b = max(input_rates), max(output_rates)
+        if max(input_price, b) > 1:
+            return None  # Unsupported prices above $1/token, avoid numeric overflow.
         i, o = (
             int(item["context_length"]),
             int(item["top_provider"]["max_completion_tokens"]),
@@ -60,14 +98,6 @@ def normalize(item):
             return None
         if mid.endswith(":free") and not free:
             return None
-        input_price = max(
-            [a]
-            + [
-                Decimal(str(v))
-                for k, v in pricing.items()
-                if k.startswith("input_cache_")
-            ]
-        )
         result = {
             "id": "openrouter/" + mid,
             "provider_model": mid,

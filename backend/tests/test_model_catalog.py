@@ -113,3 +113,79 @@ class CatalogLifecycleTests(unittest.TestCase):
             catalog.refresh()
             with DB() as db:
                 self.assertFalse(db.get(CatalogModel, item["id"]).present)
+
+
+class ClaudePricingTests(unittest.TestCase):
+    def claude(self, **pricing):
+        return model(
+            id="anthropic/claude-sonnet-4.5",
+            pricing={
+                "prompt": "0.000003",
+                "completion": "0.000015",
+                "web_search": "0.01",
+                "input_cache_read": "0.0000003",
+                "input_cache_write": "0.00000375",
+                "input_cache_write_1h": "0.000006",
+                **pricing,
+            },
+        )
+
+    def test_claude_optional_search_and_one_hour_cache_are_supported(self):
+        item = normalize(self.claude())
+        self.assertIsNotNone(item)
+        self.assertEqual(item["price_class"], "paid")
+        self.assertEqual(item["input_price"], "0.000006")
+        self.assertEqual(item["output_price"], "0.000015")
+
+    def test_long_context_tiers_reserve_highest_cache_and_output_rates(self):
+        from decimal import Decimal
+
+        item = normalize(
+            self.claude(
+                overrides=[
+                    {
+                        "min_prompt_tokens": 200000,
+                        "prompt": "0.000006",
+                        "completion": "0.0000225",
+                        "input_cache_read": "0.0000006",
+                        "input_cache_write": "0.0000075",
+                        "input_cache_write_1h": "0.000012",
+                    }
+                ]
+            )
+        )
+        self.assertIsNotNone(item)
+        self.assertEqual(Decimal(item["input_price"]), Decimal("0.000012"))
+        self.assertEqual(Decimal(item["output_price"]), Decimal("0.0000225"))
+        self.assertEqual(
+            Decimal(item["ceiling"]),
+            Decimal("0.000012") * 8192 + Decimal("0.0000225") * 4096,
+        )
+
+    def test_invalid_tiers_unknown_fees_and_invalid_cache_fail_closed(self):
+        for change in (
+            {"overrides": {}},
+            {"overrides": [{"prompt": "0.01"}]},
+            {
+                "overrides": [
+                    {"min_prompt_tokens": 100, "prompt": "NaN", "completion": "1"}
+                ]
+            },
+            {"input_cache_write_1h": "-1"},
+            {"unknown_fee": ".01"},
+        ):
+            with self.subTest(change=change):
+                self.assertIsNone(normalize(self.claude(**change)))
+
+    def test_free_with_optional_charges_still_rejected(self):
+        self.assertIsNone(
+            normalize(
+                model(pricing={"prompt": "0", "completion": "0", "web_search": ".01"})
+            )
+        )
+
+    def test_batch_and_online_variants_not_chat_routes(self):
+        for suffix in (":batch", ":online"):
+            data = self.claude()
+            data["id"] += suffix
+            self.assertIsNone(normalize(data))
