@@ -21,7 +21,7 @@ class RunnerClient:
             with httpx.Client(
                 base_url=os.environ.get("RUNNER_URL", "http://sandbox-runner:8080"),
                 headers={"Authorization": "Bearer " + token},
-                timeout=130 if path.endswith("/exec") else 20,
+                timeout=130 if path.endswith("/exec") else 45,
                 trust_env=False,
             ) as client:
                 r = client.request(method, path, json=payload)
@@ -55,3 +55,13 @@ class RunnerClient:
 
     def purge(self, owner, sid):
         return self.call("POST", "/scopes/purge", {"owner_id": owner, "scope_id": sid})
+
+    def validate_workspace(self, binding):
+        return self.call("POST", "/workspaces/validate", binding)
+
+    def configure(self, owner, sid, binding):
+        return self.call(
+            "POST",
+            "/scopes/configure",
+            {"owner_id": owner, "scope_id": sid, "binding": binding},
+        )
