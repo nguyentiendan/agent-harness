@@ -10,7 +10,7 @@ LIMIT = 25 * 1024 * 1024
 
 
 @contextmanager
-def helper(rt, owner, sid, write=False):
+def helper(rt, owner, sid, write=False, workspace_revision=0):
     if not rt.helpers.acquire(blocking=False):
         raise RunnerError("File gateway is busy.")
     container = None
@@ -18,7 +18,7 @@ def helper(rt, owner, sid, write=False):
     try:
         # Serialize against ensure/purge while the helper has access to scope files.
         with rt.lock, rt.db() as db:
-            rt.scope(db, owner, sid)
+            binding = rt._binding(db, owner, sid, workspace_revision)
             if (
                 write
                 and db.execute(
@@ -26,17 +26,11 @@ def helper(rt, owner, sid, write=False):
                 ).fetchone()
             ):
                 raise RunnerError("Scope has a running agent.")
-            try:
-                volume = rt.client.volumes.get(rt.volume(sid))
-            except NotFound:
-                if not write:
-                    raise RunnerError("File not found.")
-                volume = rt.client.volumes.create(
-                    name=rt.volume(sid),
-                    labels={**rt.labels(), "owner": owner, "scope": sid},
-                )
-            if volume.attrs.get("Labels", {}).get("owner") != owner:
-                raise RunnerError("Volume ownership mismatch.")
+            if sid in rt.active_helpers:
+                raise RunnerError("Workspace file operation is busy.")
+            if binding["mode"] == "managed":
+                rt.managed_volume(owner, sid, create=write)
+            rt.active_helpers.add(sid)
             container = rt.client.containers.run(
                 rt.client.images.get(rt.image).id,
                 ["sleep", "90"],
@@ -46,7 +40,7 @@ def helper(rt, owner, sid, write=False):
                     "helper": "true",
                     "expires": str(time.time() + 90),
                 },
-                **rt.options(volume.name, readonly=not write),
+                **rt.options(rt.volume(sid), readonly=not write, binding=binding),
             )
 
             def kill():
@@ -69,6 +63,8 @@ def helper(rt, owner, sid, write=False):
                 except NotFound:
                     pass
         finally:
+            with rt.lock:
+                rt.active_helpers.discard(sid)
             rt.helpers.release()
 
 
@@ -78,13 +74,13 @@ def checked(result):
     return result
 
 
-def upload(rt, owner, sid, path, source):
+def upload(rt, owner, sid, path, source, workspace_revision=0):
     source.seek(0, 2)
     size = source.tell()
     source.seek(0)
     if size > LIMIT:
         raise RunnerError("File exceeds 25 MiB.")
-    with helper(rt, owner, sid, True) as c:
+    with helper(rt, owner, sid, True, workspace_revision) as c:
         # Docker archive PUT rejects readonly rootfs even for /tmp tmpfs.
         # Fixed helper program reads exactly the bounded body through exec stdin.
         program = "import sys\nn=int(sys.argv[1])\nwith open('/tmp/upload','xb') as f:\n while n:\n  b=sys.stdin.buffer.read(min(n,65536))\n  if not b: raise RuntimeError('Incomplete upload')\n  f.write(b);n-=len(b)\n"
@@ -115,8 +111,8 @@ def upload(rt, owner, sid, path, source):
         return checked(rt.invoke(c, {"op": "import_file", "path": path}))
 
 
-def download(rt, owner, sid, path, destination):
-    with helper(rt, owner, sid) as c:
+def download(rt, owner, sid, path, destination, workspace_revision=0):
+    with helper(rt, owner, sid, workspace_revision=workspace_revision) as c:
         result = checked(rt.invoke(c, {"op": "export_file", "path": path}))
         # Docker archive GET does not see tmpfs contents; stream from the fixed staging file.
         eid = rt.client.api.exec_create(
@@ -147,6 +143,6 @@ def download(rt, owner, sid, path, destination):
         return result
 
 
-def delete(rt, owner, sid, path):
-    with helper(rt, owner, sid, True) as c:
+def delete(rt, owner, sid, path, workspace_revision=0):
+    with helper(rt, owner, sid, True, workspace_revision) as c:
         return checked(rt.invoke(c, {"op": "delete_file", "path": path}))

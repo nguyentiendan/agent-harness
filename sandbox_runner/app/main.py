@@ -25,6 +25,21 @@ class Scope(BaseModel):
     scope_id: UUID
 
 
+class VersionedScope(Scope):
+    workspace_revision: int = Field(default=0, ge=0)
+
+
+class WorkspaceBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["managed", "local"]
+    local_path: str | None = Field(default=None, max_length=4096)
+    revision: int = Field(ge=0)
+
+
+class Configure(Scope):
+    binding: WorkspaceBinding
+
+
 class Tool(BaseModel):
     model_config = ConfigDict(extra="forbid")
     op: Literal["bash", "read_file", "write_file", "edit_file", "list_dir"]
@@ -44,7 +59,7 @@ class Tool(BaseModel):
         }
 
 
-class FileRequest(Scope):
+class FileRequest(VersionedScope):
     op: Literal["read_file", "list_dir"]
     path: str = Field(default="", max_length=1024)
 
@@ -92,8 +107,14 @@ def safe(call, *args):
 
 
 @app.post("/runs/{rid}/ensure")
-def ensure(rid: UUID, body: Scope):
-    return safe(runtime.ensure, str(rid), str(body.owner_id), str(body.scope_id))
+def ensure(rid: UUID, body: VersionedScope):
+    return safe(
+        runtime.ensure,
+        str(rid),
+        str(body.owner_id),
+        str(body.scope_id),
+        body.workspace_revision,
+    )
 
 
 @app.post("/runs/{rid}/exec")
@@ -113,6 +134,22 @@ def files(body: FileRequest):
         str(body.owner_id),
         str(body.scope_id),
         {"op": body.op, "path": body.path},
+        body.workspace_revision,
+    )
+
+
+@app.post("/workspaces/validate")
+def validate_workspace(body: WorkspaceBinding):
+    return safe(runtime.validate_workspace, body.model_dump())
+
+
+@app.post("/scopes/configure")
+def configure(body: Configure):
+    return safe(
+        runtime.configure,
+        str(body.owner_id),
+        str(body.scope_id),
+        body.binding.model_dump(),
     )
 
 
@@ -155,7 +192,13 @@ async def run_sync(call, *args):
 
 
 @app.post("/transfer/upload")
-async def upload(request: Request, owner_id: UUID, scope_id: UUID, path: str):
+async def upload(
+    request: Request,
+    owner_id: UUID,
+    scope_id: UUID,
+    path: str,
+    workspace_revision: int = 0,
+):
     if not transfer_slots.acquire(blocking=False):
         raise HTTPException(503, "File gateway busy.")
     try:
@@ -175,13 +218,16 @@ async def upload(request: Request, owner_id: UUID, scope_id: UUID, path: str):
                     str(scope_id),
                     path,
                     source,
+                    workspace_revision,
                 )
     finally:
         transfer_slots.release()
 
 
 @app.get("/transfer/download")
-async def download(owner_id: UUID, scope_id: UUID, path: str):
+async def download(
+    owner_id: UUID, scope_id: UUID, path: str, workspace_revision: int = 0
+):
     if not transfer_slots.acquire(blocking=False):
         raise HTTPException(503, "File gateway busy.")
     output = tempfile.TemporaryFile()
@@ -194,6 +240,7 @@ async def download(owner_id: UUID, scope_id: UUID, path: str):
             str(scope_id),
             path,
             output,
+            workspace_revision,
         )
     except BaseException:
         output.close()
@@ -216,5 +263,12 @@ async def download(owner_id: UUID, scope_id: UUID, path: str):
 
 
 @app.delete("/transfer/file")
-def delete_file(owner_id: UUID, scope_id: UUID, path: str):
-    return safe(transfers.delete, runtime, str(owner_id), str(scope_id), path)
+def delete_file(owner_id: UUID, scope_id: UUID, path: str, workspace_revision: int = 0):
+    return safe(
+        transfers.delete,
+        runtime,
+        str(owner_id),
+        str(scope_id),
+        path,
+        workspace_revision,
+    )

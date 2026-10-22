@@ -11,7 +11,7 @@ import time
 import uuid
 import docker
 from docker.errors import NotFound
-from docker.types import LogConfig
+from .storage import validate_binding, mount_options, probe_local, profile
 
 
 class RunnerError(Exception):
@@ -35,6 +35,7 @@ class Runtime:
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         self.lock = threading.RLock()
         self.busy = set()
+        self.active_helpers = set()
         self.helpers = threading.BoundedSemaphore(2)
         with self.db() as db:
             db.execute(
@@ -43,6 +44,21 @@ class Runtime:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, scope TEXT, owner TEXT, closed INTEGER NOT NULL, expires REAL NOT NULL)"
             )
+
+            for table, columns in {
+                "scopes": {
+                    "mode": "TEXT NOT NULL DEFAULT 'managed'",
+                    "local_path": "TEXT",
+                    "revision": "INTEGER NOT NULL DEFAULT 0",
+                },
+                "runs": {"revision": "INTEGER NOT NULL DEFAULT 0"},
+            }.items():
+                present = {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
+                for name, definition in columns.items():
+                    if name not in present:
+                        db.execute(
+                            f"ALTER TABLE {table} ADD COLUMN {name} {definition}"
+                        )
 
     @contextmanager
     def db(self):
@@ -73,36 +89,96 @@ class Runtime:
         if not row:
             db.execute("INSERT INTO scopes(id,owner) VALUES(?,?)", (sid, owner))
 
-    def options(self, volume, readonly=False):
-        return dict(
-            user="10001:10001",
-            working_dir="/workspace",
-            network_mode="none",
-            read_only=True,
-            cap_drop=["ALL"],
-            security_opt=["no-new-privileges:true"],
-            mem_limit="1g",
-            memswap_limit="1g",
-            nano_cpus=1000000000,
-            pids_limit=128,
-            tmpfs={"/tmp": "rw,noexec,nosuid,nodev,size=67108864,mode=1777"},
-            volumes={
-                volume: {"bind": "/workspace", "mode": "ro" if readonly else "rw"}
-            },
-            environment={"HOME": "/tmp", "LANG": "C.UTF-8"},
-            log_config=LogConfig(type="none"),
-            init=True,
-        )
+    def options(self, volume, readonly=False, binding=None):
+        return {
+            **profile(),
+            **mount_options(
+                binding or dict(mode="managed", local_path=None, revision=0),
+                volume,
+                readonly,
+            ),
+        }
 
-    def ensure(self, rid, owner, sid):
-        identifier(rid)
+    def validate_workspace(self, binding):
+        if not self.helpers.acquire(blocking=False):
+            raise RunnerError("File gateway is busy.")
+        try:
+            return probe_local(self.client, self.image, binding, self.labels())
+        finally:
+            self.helpers.release()
+
+    def _binding(self, db, owner, sid, revision):
+        self.scope(db, owner, sid)
+        row = db.execute(
+            "SELECT mode,local_path,revision FROM scopes WHERE id=?", (sid,)
+        ).fetchone()
+        if row[2] != revision:
+            raise RunnerError("Workspace changed. Refresh and retry.")
+        return dict(mode=row[0], local_path=row[1], revision=row[2])
+
+    def binding_for(self, owner, sid, revision):
+        with self.lock, self.db() as db:
+            return self._binding(db, owner, sid, revision)
+
+    def configure(self, owner, sid, binding):
+        binding = validate_binding(binding)
         with self.lock, self.db() as db:
             self.scope(db, owner, sid)
             row = db.execute(
-                "SELECT scope,owner,closed,expires FROM runs WHERE id=?", (rid,)
+                "SELECT mode,local_path,revision FROM scopes WHERE id=?", (sid,)
+            ).fetchone()
+            current = dict(mode=row[0], local_path=row[1], revision=row[2])
+            if binding == current:
+                return {"ready": True}
+            if binding["revision"] <= current["revision"]:
+                raise RunnerError("Workspace changed. Refresh and retry.")
+            if (
+                sid in self.active_helpers
+                or db.execute(
+                    "SELECT id FROM runs WHERE scope=? AND closed=0", (sid,)
+                ).fetchone()
+            ):
+                raise RunnerError("Workspace is busy.")
+            db.execute(
+                "UPDATE scopes SET mode=?,local_path=?,revision=? WHERE id=?",
+                (binding["mode"], binding["local_path"], binding["revision"], sid),
+            )
+        return {"ready": True}
+
+    def managed_volume(self, owner, sid, create=True):
+        try:
+            v = self.client.volumes.get(self.volume(sid))
+        except NotFound:
+            if not create:
+                raise
+            v = self.client.volumes.create(
+                name=self.volume(sid),
+                labels={**self.labels(), "owner": owner, "scope": sid},
+            )
+        if (
+            v.attrs.get("Labels", {}).get("owner") != owner
+            or v.attrs.get("Labels", {}).get("harness.runner") != self.namespace
+        ):
+            raise RunnerError("Volume ownership mismatch.")
+        return v
+
+    def ensure(self, rid, owner, sid, workspace_revision=0):
+        identifier(rid)
+        with self.lock, self.db() as db:
+            binding = self._binding(db, owner, sid, workspace_revision)
+            if sid in self.active_helpers:
+                raise RunnerError("Workspace file operation is busy.")
+            row = db.execute(
+                "SELECT scope,owner,closed,expires,revision FROM runs WHERE id=?",
+                (rid,),
             ).fetchone()
             if row:
-                if row[:2] != (sid, owner) or row[2] or row[3] <= time.time():
+                if (
+                    row[:2] != (sid, owner)
+                    or row[2]
+                    or row[3] <= time.time()
+                    or row[4] != workspace_revision
+                ):
                     raise RunnerError("Run is unavailable.")
                 try:
                     container = self.client.containers.get(self.name(rid))
@@ -118,20 +194,12 @@ class Runtime:
             # Image ID is immutable for this run even if a local tag changes later.
             image = self.client.images.get(self.image).id
             volume = self.volume(sid)
-            try:
-                v = self.client.volumes.get(volume)
-                if (
-                    v.attrs.get("Labels", {}).get("owner") != owner
-                    or v.attrs.get("Labels", {}).get("harness.runner") != self.namespace
-                ):
-                    raise RunnerError("Volume ownership mismatch.")
-            except NotFound:
-                self.client.volumes.create(
-                    name=volume, labels={**self.labels(), "owner": owner, "scope": sid}
-                )
+            if binding["mode"] == "managed":
+                self.managed_volume(owner, sid)
             expires = time.time() + 900
             db.execute(
-                "INSERT INTO runs VALUES(?,?,?,?,?)", (rid, sid, owner, 0, expires)
+                "INSERT INTO runs(id,scope,owner,closed,expires,revision) VALUES(?,?,?,?,?,?)",
+                (rid, sid, owner, 0, expires, workspace_revision),
             )
             # Commit registry BEFORE Docker create: restart cleanup can find uncertain creates.
             db.commit()
@@ -142,7 +210,7 @@ class Runtime:
                     name=self.name(rid),
                     detach=True,
                     labels={**self.labels(), "run": rid, "expires": str(expires)},
-                    **self.options(volume),
+                    **self.options(volume, binding=binding),
                 )
             except Exception:
                 db.execute("UPDATE runs SET closed=1 WHERE id=?", (rid,))
@@ -225,50 +293,20 @@ class Runtime:
             raise RunnerError("Invalid tool result.")
         return result
 
-    def files(self, owner, sid, payload):
-        if not self.helpers.acquire(blocking=False):
-            raise RunnerError("File gateway is busy; retry shortly.")
-        try:
-            return self._files(owner, sid, payload)
-        finally:
-            self.helpers.release()
-
-    def _files(self, owner, sid, payload):
+    def files(self, owner, sid, payload, workspace_revision=0):
         if payload["op"] not in ("list_dir", "read_file"):
             raise RunnerError("Gateway is read-only.")
-        with self.lock, self.db() as db:
-            self.scope(db, owner, sid)
-            try:
-                volume = self.client.volumes.get(self.volume(sid))
-            except NotFound:
-                if payload["op"] == "list_dir":
-                    return {"files": []}
-                raise RunnerError("File not found.")
-            if volume.attrs.get("Labels", {}).get("owner") != owner:
-                raise RunnerError("Volume ownership mismatch.")
-            image = self.client.images.get(self.image).id
-            helper = self.client.containers.run(
-                image,
-                ["sleep", "30"],
-                detach=True,
-                labels={
-                    **self.labels(),
-                    "helper": "true",
-                    "expires": str(time.time() + 30),
-                },
-                **self.options(volume.name, readonly=True),
-            )
-        timer = threading.Timer(15, lambda: helper.remove(force=True))
-        timer.daemon = True
-        timer.start()
+        from .transfers import helper
+
         try:
-            return self.invoke(helper, payload)
-        finally:
-            timer.cancel()
-            try:
-                helper.remove(force=True)
-            except NotFound:
-                pass
+            with helper(
+                self, owner, sid, workspace_revision=workspace_revision
+            ) as container:
+                return self.invoke(container, payload)
+        except NotFound:
+            if payload["op"] == "list_dir":
+                return {"files": []}
+            raise RunnerError("File not found.")
 
     def purge(self, owner, sid):
         with self.lock, self.db() as db:
@@ -280,11 +318,11 @@ class Runtime:
             active = db.execute(
                 "SELECT id FROM runs WHERE scope=? AND closed=0", (sid,)
             ).fetchone()
-            if active:
+            if active or sid in self.active_helpers:
                 raise RunnerError("Scope still has an active run.")
             # Retain a tombstone; stale requests must not recreate a deleted scope.
             db.execute(
-                "INSERT INTO scopes VALUES(?,?,1) ON CONFLICT(id) DO UPDATE SET deleted=1",
+                "INSERT INTO scopes(id,owner,deleted) VALUES(?,?,1) ON CONFLICT(id) DO UPDATE SET deleted=1",
                 (sid, owner),
             )
             db.commit()
