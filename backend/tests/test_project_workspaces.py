@@ -165,3 +165,54 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(
             self.client.get(f"/api/projects/{pid}").json()["workspace"]["revision"], 0
         )
+
+    def test_cancelled_upload_retains_reservation_until_request_finishes(self):
+        import asyncio
+        import httpx
+        from types import SimpleNamespace
+        from app.platform.files import upload
+        from app.platform.db import DB
+
+        self.login()
+        pid = self.create()
+
+        async def exercise():
+            entered, finish = asyncio.Event(), asyncio.Event()
+
+            async def transport(request):
+                entered.set()
+                await finish.wait()
+                return httpx.Response(200, json={"bytes": 4})
+
+            async def stream():
+                yield b"demo"
+
+            def connection():
+                return httpx.AsyncClient(
+                    base_url="http://runner", transport=httpx.MockTransport(transport)
+                )
+
+            request = SimpleNamespace(
+                cookies=dict(self.client.cookies),
+                path_params={"pid": pid},
+                stream=stream,
+            )
+            with (
+                patch("app.execution.client.RunnerClient.configure"),
+                patch("app.platform.files.connection", side_effect=connection),
+                DB.begin() as db,
+            ):
+                task = asyncio.create_task(
+                    upload(request, path="a.txt", ctx=(db, None, None))
+                )
+                await asyncio.wait_for(entered.wait(), 1)
+                task.cancel()
+                await asyncio.sleep(0.01)
+                self.assertIn(pid, transfers)
+                self.assertFalse(task.done())
+                finish.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+            self.assertNotIn(pid, transfers)
+
+        asyncio.run(exercise())
