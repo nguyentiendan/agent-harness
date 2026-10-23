@@ -1,6 +1,8 @@
 """Normalize provider limits without conflating input and combined windows."""
+
 from dataclasses import dataclass
 from .policy import ContextPolicy
+
 
 @dataclass(frozen=True)
 class ModelLimits:
@@ -8,6 +10,7 @@ class ModelLimits:
     max_input_tokens: int | None
     max_output_tokens: int
     revision: str
+
 
 def resolve_model_limits(metadata: dict, policy: ContextPolicy) -> ModelLimits:
     window = metadata.get("context_window")
@@ -20,7 +23,10 @@ def resolve_model_limits(metadata: dict, policy: ContextPolicy) -> ModelLimits:
         raise ValueError("Verified model context/output limits are required")
     if input_cap is not None and (type(input_cap) is not int or input_cap <= 0):
         raise ValueError("Invalid model input cap")
-    return ModelLimits(window, input_cap, output, str(metadata.get("revision", "legacy")))
+    return ModelLimits(
+        window, input_cap, output, str(metadata.get("revision", "legacy"))
+    )
+
 
 def effective_output_cap(requested: int, user_cap: int, limits: ModelLimits) -> int:
     if min(requested, user_cap) <= 0:

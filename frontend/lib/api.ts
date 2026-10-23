@@ -36,6 +36,7 @@ export interface HarnessEvent {
     | "assistant"
     | "approval"
     | "approval_result"
+    | "context"
     | "status";
   [key: string]: unknown;
 }

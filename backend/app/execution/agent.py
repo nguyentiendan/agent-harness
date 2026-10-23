@@ -3,6 +3,8 @@
 import asyncio
 import json
 from . import client, lifecycle
+from app.context.history import bounded_output, record_protocol
+from app.observability import tracing
 from app.config import load_config
 from app.context.policy import load_context_policy
 from app.prompts.project import PROJECT_PROMPT_SPEC
@@ -67,7 +69,12 @@ async def run(llm, rid, history, model, emit):
     messages = [
         {
             "role": "system",
-            "content": render_prompt(SYSTEM_PROMPT_SPEC, {}).text + "\n" + render_prompt(PROJECT_PROMPT_SPEC, {"workspace": policy.workspace, "max_turns": max_turns}).text,
+            "content": render_prompt(SYSTEM_PROMPT_SPEC, {}).text
+            + "\n"
+            + render_prompt(
+                PROJECT_PROMPT_SPEC,
+                {"workspace": policy.workspace, "max_turns": max_turns},
+            ).text,
         },
         *history,
     ]
@@ -79,7 +86,13 @@ async def run(llm, rid, history, model, emit):
         if len(calls) > policy.max_tool_calls:
             raise RuntimeError("Too many tool calls.")
         if message.content:
-            emit({"type": "assistant", "text": message.content})
+            emit(
+                {
+                    "type": "assistant",
+                    "text": message.content,
+                    "tool_assistant": bool(calls),
+                }
+            )
         if not calls:
             return
         messages.append(
@@ -99,6 +112,8 @@ async def run(llm, rid, history, model, emit):
                 ],
             }
         )
+        group_id = "turn:" + str(_)
+        record_protocol(rid, group_id + ":assistant", messages[-1], group_id)
         for call in calls:
             name = call.function.name
             try:
@@ -108,17 +123,17 @@ async def run(llm, rid, history, model, emit):
             except (ValueError, TypeError):
                 raise RuntimeError("Invalid tool call.")
             emit({"type": "tool_call", "name": name, "args": args})
-            await asyncio.to_thread(lifecycle.prepare, rid)
-            result = await asyncio.to_thread(
-                client.RunnerClient().execute, rid, {"op": name, **args}
-            )
-            output = json.dumps(result, ensure_ascii=False)
-            # Both persistence and next model input are bounded.
-            output = output[:policy.tool_output_chars]
+            with tracing.span("tool", {"tool_name": name, "tool_call_id": call.id}):
+                await asyncio.to_thread(lifecycle.prepare, rid)
+                result = await asyncio.to_thread(
+                    client.RunnerClient().execute, rid, {"op": name, **args}
+                )
+            output = bounded_output(result, policy.tool_output_chars)
             emit({"type": "tool_result", "name": name, "output": output})
             messages.append(
                 {"role": "tool", "tool_call_id": call.id, "content": output}
             )
+            record_protocol(rid, group_id + ":" + call.id, messages[-1], group_id)
             if result.get("timed_out"):
                 raise RuntimeError("Sandbox command timed out; container removed.")
     raise RuntimeError("Maximum agent turns reached.")

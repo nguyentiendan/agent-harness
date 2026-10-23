@@ -192,9 +192,9 @@ class PlatformTests(unittest.TestCase):
         self.login()
         sid = self.new_chat()
         with patch(
-            "app.platform.chat.LiteLLMClientWrapper.complete",
+            "app.platform.chat.LiteLLMClientWrapper._dispatch",
             new=AsyncMock(return_value=response),
-        ) as model:
+        ) as model, patch("app.billing.catalog.lookup", return_value={"context_window": 32000, "max_output_tokens": 4096, "revision": "test"}):
             payload = {"session_id": sid, "goal": "first", "request_id": "r1"}
             r = self.client.post("/api/harness/start", json=payload)
             self.assertEqual(r.status_code, 200, r.text)
@@ -229,7 +229,7 @@ class PlatformTests(unittest.TestCase):
                     break
                 time.sleep(0.01)
             self.assertEqual(model.await_count, 2)
-            self.assertNotIn("tools", model.call_args.kwargs)
+            self.assertIsNone(model.call_args.kwargs.get("tools"))
             self.assertTrue(
                 any(m.get("content") == "first" for m in model.call_args.args[0])
             )

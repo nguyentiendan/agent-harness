@@ -1,7 +1,9 @@
 """Validated operational settings, snapshotted per run."""
+
 from dataclasses import dataclass, asdict
 import hashlib
 import json
+
 
 @dataclass(frozen=True)
 class ContextPolicy:
@@ -20,13 +22,17 @@ class ContextPolicy:
     tool_output_chars: int = 70000
     workspace: str = "/workspace"
     trace_payloads: bool = False
+    trace_payload_chars: int = 16000
     trace_retention_days: int = 30
     payload_retention_days: int = 7
     export_max_attempts: int = 5
 
     @property
     def content_hash(self):
-        return hashlib.sha256(json.dumps(asdict(self), sort_keys=True).encode()).hexdigest()
+        return hashlib.sha256(
+            json.dumps(asdict(self), sort_keys=True).encode()
+        ).hexdigest()
+
 
 def load_context_policy(config: dict) -> ContextPolicy:
     raw = config.get("context", {})
@@ -45,7 +51,9 @@ def load_context_policy(config: dict) -> ContextPolicy:
         elif type(default) is float:
             valid = type(value) in (int, float) and 0 < value < 1
         else:
-            valid = isinstance(value, str) and (bool(value.strip()) or key == "summary_model")
+            valid = isinstance(value, str) and (
+                bool(value.strip()) or key == "summary_model"
+            )
         if not valid:
             raise ValueError(f"Invalid context setting: {key}")
     return policy

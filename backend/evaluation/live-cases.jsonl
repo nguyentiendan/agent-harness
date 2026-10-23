@@ -1,0 +1,3 @@
+{"id": "chat-exact", "turns": ["Reply with exactly HELLO."], "expect": {"contains": ["HELLO"]}, "severity": "quality"}
+{"id": "chat-correction", "turns": ["My project codename is Cedar. Remember it for this conversation.", "Correction: the codename is Birch. Reply with only the current codename."], "expect": {"contains": ["Birch"]}, "severity": "quality"}
+{"id": "project-file", "mode": "project", "turns": ["Create result.txt containing exactly verified-output, with no newline. Read the file to verify it."], "expect": {"files": {"result.txt": "verified-output"}}, "severity": "critical"}

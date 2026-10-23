@@ -27,8 +27,89 @@ class LiteLLMClientWrapper:
         self.max_tokens = max_tokens
         self.max_retries = max_retries
         self.retry_backoff = retry_backoff
+        self.context_runtime = None
 
     async def complete(
+        self,
+        messages,
+        model=None,
+        tools=None,
+        temperature=None,
+        max_tokens=None,
+        purpose="generation",
+    ):
+        from app.observability import tracing
+
+        target = model or self.default_model
+        output = self.max_tokens if max_tokens is None else max_tokens
+        if self.user_id and self.run_id:
+            if self.context_runtime is None:
+                from app.context.runtime import ContextRuntime
+
+                self.context_runtime = ContextRuntime(self.user_id, self.run_id)
+            if purpose == "generation":
+                prepared = await self.context_runtime.prepare(
+                    messages, target, tools, output, self.complete
+                )
+                messages, output = (
+                    prepared.messages,
+                    prepared.effective_max_output_tokens,
+                )
+            elif purpose in ("summary", "judge"):
+                # Summary input is bounded by its own builder; dispatch applies
+                # the same model limits and authorization again below.
+                from app.context.limits import resolve_model_limits
+                from app.context.tokens import count_payload
+                from app.billing import catalog, gateway
+
+                metadata = await asyncio.to_thread(catalog.lookup, target)
+                if not metadata:
+                    metadata = (await asyncio.to_thread(gateway.priced_models)).get(
+                        target, {}
+                    )
+                limits = resolve_model_limits(metadata, self.context_runtime.policy)
+                output = min(output, limits.max_output_tokens)
+                reserve = max(
+                    self.context_runtime.policy.safety_tokens,
+                    int(
+                        limits.context_window
+                        * self.context_runtime.policy.safety_fraction
+                    ),
+                )
+                if (
+                    count_payload(messages, tools or [], target).tokens
+                    + output
+                    + reserve
+                    > limits.context_window
+                ):
+                    raise ValueError("Auxiliary model context exceeds budget")
+            else:
+                raise ValueError("Unknown model purpose")
+        with tracing.span("model", {"model": target, "purpose": purpose}) as sid:
+            if self.context_runtime:
+                tracing.capture_payload(
+                    tracing.current_trace.get(),
+                    sid,
+                    {"messages": messages, "tools": tools},
+                    self.context_runtime.policy,
+                )
+            response = await self._dispatch(
+                messages,
+                model=target,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=output,
+            )
+            if self.context_runtime:
+                tracing.capture_payload(
+                    tracing.current_trace.get(),
+                    sid,
+                    {"response": response.choices[0].message.content},
+                    self.context_runtime.policy,
+                )
+            return response
+
+    async def _dispatch(
         self,
         messages: List[Dict[str, Any]],
         model: Optional[str] = None,
@@ -50,6 +131,9 @@ class LiteLLMClientWrapper:
                 tools,
                 self.temperature if temperature is None else temperature,
                 max_tokens or self.max_tokens,
+                expected_model_revision=self.context_runtime.dispatch_revision
+                if self.context_runtime
+                else None,
             )
         import litellm
 
@@ -69,11 +153,11 @@ class LiteLLMClientWrapper:
             kwargs["model"] = f"litellm_proxy/{target}"
             kwargs["api_base"] = proxy_url
             # Legacy CLI requires an explicit scoped key; never use management credentials.
-            proxy_key = (
-                os.environ.get("LITELLM_PROXY_KEY", "").strip()
-            )
+            proxy_key = os.environ.get("LITELLM_PROXY_KEY", "").strip()
             if not proxy_key:
-                raise RuntimeError("Legacy gateway calls require an explicit scoped key.")
+                raise RuntimeError(
+                    "Legacy gateway calls require an explicit scoped key."
+                )
             kwargs["api_key"] = proxy_key
 
         last_error: Optional[Exception] = None

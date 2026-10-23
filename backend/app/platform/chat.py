@@ -54,6 +54,29 @@ def append_event(db, sid, rid, payload):
         )
     )
     db.flush()
+    if payload.get("type") in ("user", "assistant"):
+        from app.context.history import append_records
+        from app.context.types import ConversationRecord
+
+        # Intermediate assistant text associated with tool calls is persisted by
+        # the agent as a complete protocol message, not duplicated here.
+        if not payload.get("tool_assistant"):
+            run = db.get(Run, rid)
+            revision = (run.workspace_snapshot or {}).get("revision") if run else None
+            append_records(
+                db,
+                sid,
+                rid,
+                [
+                    ConversationRecord(
+                        "event:" + str(seq),
+                        payload["type"],
+                        {"role": payload["type"], "content": payload["text"]},
+                        "event:" + str(seq),
+                        revision,
+                    )
+                ],
+            )
 
 
 def chat_dto(db, c):
@@ -93,6 +116,9 @@ def finish(rid, status, reason=""):
 
 
 async def execute(rid):
+    from app.observability import tracing
+
+    trace_token = tracing.current_trace.set(rid)
     try:
         with DB() as db:
             r = db.get(Run, rid)
@@ -103,9 +129,34 @@ async def execute(rid):
             instructions = project.instructions if project else ""
             history = [
                 {"role": e["type"], "content": e["text"]}
-                for e in events_for(db, sid)
+                for e in [
+                    row.payload
+                    for row in db.scalars(
+                        select(Event)
+                        .where(Event.session_id == sid, Event.run_id == rid)
+                        .order_by(Event.sequence)
+                    )
+                ]
                 if e["type"] in ("user", "assistant")
             ]
+        import hashlib
+        from app.prompts.project import PROJECT_PROMPT_SPEC
+
+        tracing.start_trace(
+            rid,
+            {
+                "scope_id": sid,
+                "model": model,
+                "instruction_hash": hashlib.sha256(instructions.encode()).hexdigest(),
+                "prompt_versions": [
+                    {"id": p.id, "version": p.version, "hash": p.content_hash}
+                    for p in (
+                        SYSTEM_PROMPT_SPEC,
+                        PROJECT_PROMPT_SPEC if project else CHAT_PROMPT_SPEC,
+                    )
+                ],
+            },
+        )
         if instructions:
             history.insert(
                 0,
@@ -133,7 +184,9 @@ async def execute(rid):
                     [
                         {
                             "role": "system",
-                            "content": render_prompt(SYSTEM_PROMPT_SPEC, {}).text + "\n" + render_prompt(CHAT_PROMPT_SPEC, {}).text,
+                            "content": render_prompt(SYSTEM_PROMPT_SPEC, {}).text
+                            + "\n"
+                            + render_prompt(CHAT_PROMPT_SPEC, {}).text,
                         },
                         *history,
                     ],
@@ -163,6 +216,7 @@ async def execute(rid):
         from app.execution.client import RunnerUnavailable
 
         from app.billing.gateway import GatewayError
+        from app.context.types import ContextBudgetExceeded
 
         status = "failed"
         reason = (
@@ -170,7 +224,7 @@ async def execute(rid):
             if isinstance(error, HTTPException)
             else (
                 str(error)
-                if isinstance(error, GatewayError)
+                if isinstance(error, (GatewayError, ContextBudgetExceeded))
                 else (
                     str(error)
                     if isinstance(error, RunnerUnavailable)
@@ -189,6 +243,8 @@ async def execute(rid):
                 locals().get("reason", ""),
             )
         )
+        tracing.finish_trace(rid, locals().get("status", "failed"))
+        tracing.current_trace.reset(trace_token)
         running.pop(rid, None)
 
 

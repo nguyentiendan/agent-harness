@@ -33,6 +33,9 @@ def purge_scope(db, sid):
 
 
 def delete_chats(db, ids):
+    from app.observability.storage import purge_scopes
+
+    purge_scopes(db, ids)
     db.execute(delete(Event).where(Event.session_id.in_(ids)))
     db.execute(delete(Run).where(Run.session_id.in_(ids)))
     db.execute(delete(Chat).where(Chat.id.in_(ids)))
@@ -74,6 +77,11 @@ def purge(now=None):
                 continue
             delete_chats(db, [c.id])
             count += 1
+        from app.observability.storage import retain
+        from app.context.policy import load_context_policy
+        from app.config import load_config
+
+        retain(db, now, load_context_policy(load_config(strict=True)))
         db.execute(delete(LoginSession).where(LoginSession.expires_at < now))
         db.execute(delete(LoginAttempt).where(LoginAttempt.reset_at < now))
     return count

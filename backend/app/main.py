@@ -13,7 +13,11 @@ from app.billing import routes as billing_routes
 async def lifespan(app):
     from app.config import load_config
     from app.context.policy import load_context_policy
+
     load_context_policy(load_config(strict=True))
+    from app.observability.tracing import interrupt_unfinished
+
+    interrupt_unfinished()
     chat.reconcile()
     from app.cli.cleanup import purge
 
@@ -60,6 +64,9 @@ app.include_router(projects.router)
 app.include_router(workspaces.router)
 app.include_router(files.router)
 app.include_router(billing_routes.router)
+from app.observability.routes import router as trace_router
+
+app.include_router(trace_router)
 
 
 @app.middleware("http")

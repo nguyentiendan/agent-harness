@@ -1,8 +1,10 @@
 """Immutable prompt contracts and stable content identity."""
+
 from dataclasses import dataclass
 import hashlib
 import json
 from string import Formatter
+
 
 @dataclass(frozen=True)
 class PromptSpec:
@@ -23,7 +25,12 @@ class PromptSpec:
 
     @property
     def content_hash(self):
-        return hashlib.sha256(json.dumps([self.template, sorted(self.variables)], ensure_ascii=False).encode()).hexdigest()
+        return hashlib.sha256(
+            json.dumps(
+                [self.template, sorted(self.variables)], ensure_ascii=False
+            ).encode()
+        ).hexdigest()
+
 
 @dataclass(frozen=True)
 class RenderedPrompt:

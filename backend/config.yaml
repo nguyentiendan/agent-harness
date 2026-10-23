@@ -118,6 +118,7 @@ context:
   tool_output_chars: 70000
   workspace: /workspace
   trace_payloads: false
+  trace_payload_chars: 16000
   trace_retention_days: 30
   payload_retention_days: 7
   export_max_attempts: 5

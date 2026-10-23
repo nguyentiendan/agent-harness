@@ -17,11 +17,27 @@ def objectify(value):
     return value
 
 
-async def complete(uid, rid, messages, model, tools, temperature, max_tokens):
+async def complete(
+    uid,
+    rid,
+    messages,
+    model,
+    tools,
+    temperature,
+    max_tokens,
+    expected_model_revision=None,
+):
     if not uid or not rid:
         raise gateway.GatewayError("AI calls require an authenticated user and run.")
     metadata = await asyncio.to_thread(catalog.lookup, model)
     if metadata:
+        if (
+            expected_model_revision is not None
+            and metadata["revision"] != expected_model_revision
+        ):
+            raise gateway.GatewayError(
+                "Model limits changed during context preparation. Start a new request."
+            )
         price = metadata
         route = await asyncio.to_thread(catalog.ensure_route, metadata)
     else:
@@ -32,7 +48,23 @@ async def complete(uid, rid, messages, model, tools, temperature, max_tokens):
             )
         price = prices[model]
         route = model
-    reservation = policy.reserve(uid, rid, model, price["ceiling"], metadata=metadata)
+    from app.evaluation.budget import current_budget
+
+    experiment_budget = current_budget.get()
+    experiment_claim = (
+        experiment_budget.claim(price["ceiling"]) if experiment_budget else None
+    )
+    try:
+        reservation = policy.reserve(
+            uid, rid, model, price["ceiling"], metadata=metadata
+        )
+    except BaseException:
+        if experiment_budget:
+            experiment_budget.settle(experiment_claim, 0)
+        raise
+    from app.observability.tracing import current_span, link_usage
+
+    link_usage(current_span.get(), reservation["id"])
     # Provisioning failure has no provider call; release precisely this reservation.
     try:
         key = await asyncio.to_thread(
@@ -55,6 +87,8 @@ async def complete(uid, rid, messages, model, tools, temperature, max_tokens):
                 raise HTTPException(409, "Run stopped before model call.")
     except BaseException:
         policy.settle(reservation["id"], 0, status="not_dispatched")
+        if experiment_budget:
+            experiment_budget.settle(experiment_claim, 0)
         raise
     payload = {
         "model": route,
@@ -95,6 +129,8 @@ async def complete(uid, rid, messages, model, tools, temperature, max_tokens):
         cost = max(costs) if costs else None
         request_id = data.get("id")
         policy.settle(reservation["id"], cost, request_id, data.get("usage"))
+        if experiment_budget:
+            experiment_budget.settle(experiment_claim, cost)
         if metadata and metadata["price_class"] == "free" and cost is not None:
             try:
                 if policy.money(cost) > 0:
@@ -116,6 +152,7 @@ async def complete(uid, rid, messages, model, tools, temperature, max_tokens):
             choice["message"].setdefault("tool_calls", [])
         if not data.get("choices"):
             raise gateway.GatewayError("AI gateway returned no completion.")
+        data["platform_usage_id"] = reservation["id"]
         return objectify(data)
     except (httpx.HTTPError, KeyError, ValueError):
         # Gateway may have dispatched upstream even if no response arrived. Keep reserve.

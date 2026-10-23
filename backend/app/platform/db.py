@@ -200,6 +200,68 @@ class CatalogModel(Base):
     route_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+# Context and telemetry rows are scoped explicitly; public access always joins Chat.
+class ContextMessage(Base):
+    __tablename__ = "context_messages"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scope_id: Mapped[str] = mapped_column(String(36), index=True)
+    run_id: Mapped[str] = mapped_column(String(36), index=True)
+    sequence: Mapped[int] = mapped_column(Integer)
+    group_id: Mapped[str] = mapped_column(String(100))
+    payload: Mapped[dict] = mapped_column(JSON)
+    workspace_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, default=time.time)
+    __table_args__ = (UniqueConstraint("scope_id", "sequence"),)
+
+
+class ContextSummary(Base):
+    __tablename__ = "context_summaries"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scope_id: Mapped[str] = mapped_column(String(36), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[float] = mapped_column(Float, default=time.time)
+
+
+class TraceRecord(Base):
+    __tablename__ = "trace_records"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    scope_id: Mapped[str] = mapped_column(String(36), index=True)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(24), default="running")
+    created_at: Mapped[float] = mapped_column(Float, default=time.time)
+    finished_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class TraceSpan(Base):
+    __tablename__ = "trace_spans"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    trace_id: Mapped[str] = mapped_column(String(36), index=True)
+    parent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(24), default="running")
+    usage_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, default=time.time)
+    finished_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class TracePayload(Base):
+    __tablename__ = "trace_payloads"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    trace_id: Mapped[str] = mapped_column(String(36), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[float] = mapped_column(Float, default=time.time)
+
+
+class TraceExportJob(Base):
+    __tablename__ = "trace_export_jobs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    trace_id: Mapped[str] = mapped_column(String(36), index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    next_attempt_at: Mapped[float] = mapped_column(Float, default=0)
+
+
 # No production fallback to a local JSON/SQLite file.
 url = os.environ.get("PLATFORM_DATABASE_URL")
 if not url:

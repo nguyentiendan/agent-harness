@@ -1,0 +1,7 @@
+version: rubric-v1
+criteria:
+  correctness: Verify the requested result against independent evidence.
+  adherence: Check user constraints and corrections.
+  grounding: Reject unsupported claims of actions or current file state.
+  uncertainty: Preserve missing evidence and failed checks.
+judge_role: supplemental

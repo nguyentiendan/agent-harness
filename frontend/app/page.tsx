@@ -266,6 +266,15 @@ function ChatHome({
             return next;
           });
           break;
+        case "context": {
+          const manifest = ev.manifest as { omitted?: unknown[]; summary_used?: boolean } | undefined;
+          const count = manifest?.omitted?.length ?? 0;
+          setMessages((m) => [...m, {
+            kind: "system",
+            text: `Context adjusted: ${count} older groups omitted${manifest?.summary_used ? "; a historical summary is included" : ""}. Original conversation history is preserved.`,
+          }]);
+          break;
+        }
         case "status":
           if (!replay) setStatus(String(ev.status ?? "idle") as HarnessStatus);
           setMessages((m) => [
