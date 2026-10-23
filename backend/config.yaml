@@ -100,3 +100,24 @@ security:
       - "/dev/stdout"
       - "/dev/stderr"
       - "/dev/stdin"
+
+# Public runtime policy. Snapshot and hash these settings for every run.
+context:
+  version: context-v1
+  max_turns: 15
+  max_tool_calls: 16
+  safety_tokens: 1024
+  safety_fraction: 0.05
+  summary_enabled: true
+  summary_trigger: 0.8
+  summary_model: ""
+  summary_output_tokens: 1024
+  summary_max_calls: 2
+  summary_input_fraction: 0.25
+  recent_groups: 4
+  tool_output_chars: 70000
+  workspace: /workspace
+  trace_payloads: false
+  trace_retention_days: 30
+  payload_retention_days: 7
+  export_max_attempts: 5

@@ -24,12 +24,14 @@ SESSIONS_FILE = DATA_DIR / "sessions.json"
 SESSION_EVENTS_DIR = DATA_DIR / "sessions"
 
 
-def load_config() -> Dict[str, Any]:
+def load_config(*, strict: bool = False) -> Dict[str, Any]:
     path = Path(CONFIG_FILE)
     if path.exists():
         try:
             return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except Exception as e:
+            if strict:
+                raise ValueError("Invalid harness configuration") from e
             print(f"[Config] Warning: could not parse {path}: {e}")
     return {}
 

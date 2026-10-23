@@ -6,6 +6,9 @@ import time
 import uuid
 from sqlalchemy import select, func
 from fastapi import HTTPException
+from app.prompts.chat import CHAT_PROMPT_SPEC
+from app.prompts.system import SYSTEM_PROMPT_SPEC
+from app.prompts.registry import render_prompt
 from app.config import load_config
 from app.integrations.llm import LiteLLMClientWrapper
 from app.security.redaction import redact_text
@@ -130,7 +133,7 @@ async def execute(rid):
                     [
                         {
                             "role": "system",
-                            "content": "You are a text-only assistant. You may answer questions, explain code and provide code examples. You cannot execute commands or create, read, edit or delete files. For those actions, tell the user to create or open a Project. Never claim to have performed file actions.",
+                            "content": render_prompt(SYSTEM_PROMPT_SPEC, {}).text + "\n" + render_prompt(CHAT_PROMPT_SPEC, {}).text,
                         },
                         *history,
                     ],

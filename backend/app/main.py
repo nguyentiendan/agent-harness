@@ -11,6 +11,9 @@ from app.billing import routes as billing_routes
 
 @asynccontextmanager
 async def lifespan(app):
+    from app.config import load_config
+    from app.context.policy import load_context_policy
+    load_context_policy(load_config(strict=True))
     chat.reconcile()
     from app.cli.cleanup import purge
 

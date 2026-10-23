@@ -116,6 +116,7 @@ def normalize(item):
             "price_class": "free" if free else "paid",
             "input_price": str(input_price),
             "output_price": str(b),
+            "context_window": i,
             "max_input_tokens": i,
             "max_output_tokens": o,
             "ceiling": str(input_price * i + b * o),

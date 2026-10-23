@@ -3,6 +3,11 @@
 import asyncio
 import json
 from . import client, lifecycle
+from app.config import load_config
+from app.context.policy import load_context_policy
+from app.prompts.project import PROJECT_PROMPT_SPEC
+from app.prompts.system import SYSTEM_PROMPT_SPEC
+from app.prompts.registry import render_prompt
 
 SCHEMAS = []
 for name, description, props, required in [
@@ -57,19 +62,21 @@ for name, description, props, required in [
 
 
 async def run(llm, rid, history, model, emit):
+    policy = load_context_policy(load_config(strict=True))
+    max_turns = policy.max_turns
     messages = [
         {
             "role": "system",
-            "content": "You are an AI assistant with an offline Docker sandbox. Use tools to inspect or change files; all user work is in /workspace. No network/package downloads, host access, or privileged operations. Files in /workspace persist between messages. Never claim actions without tool evidence. Maximum 15 tool/model turns.",
+            "content": render_prompt(SYSTEM_PROMPT_SPEC, {}).text + "\n" + render_prompt(PROJECT_PROMPT_SPEC, {"workspace": policy.workspace, "max_turns": max_turns}).text,
         },
         *history,
     ]
     known = {s["function"]["name"] for s in SCHEMAS}
-    for _ in range(15):
+    for _ in range(max_turns):
         response = await llm.complete(messages, model=model, tools=SCHEMAS)
         message = response.choices[0].message
         calls = message.tool_calls or []
-        if len(calls) > 16:
+        if len(calls) > policy.max_tool_calls:
             raise RuntimeError("Too many tool calls.")
         if message.content:
             emit({"type": "assistant", "text": message.content})
@@ -107,7 +114,7 @@ async def run(llm, rid, history, model, emit):
             )
             output = json.dumps(result, ensure_ascii=False)
             # Both persistence and next model input are bounded.
-            output = output[:70000]
+            output = output[:policy.tool_output_chars]
             emit({"type": "tool_result", "name": name, "output": output})
             messages.append(
                 {"role": "tool", "tool_call_id": call.id, "content": output}
