@@ -78,6 +78,8 @@ def start_span(
         return None
     sid = str(uuid.uuid4())
     with DB.begin() as db:
+        if not db.get(TraceRecord, trace_id):
+            return None
         db.add(
             TraceSpan(
                 id=sid,
@@ -160,6 +162,8 @@ def capture_payload(trace_id, span_id, payload, policy):
 
     safe = json.loads(redact_text(bounded_output(payload, policy.trace_payload_chars)))
     with DB.begin() as db:
+        if not db.get(TraceRecord, trace_id):
+            return
         db.add(
             TracePayload(
                 id=str(uuid.uuid4()),

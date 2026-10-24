@@ -41,6 +41,7 @@ class LiteLLMClientWrapper:
         from app.observability import tracing
 
         target = model or self.default_model
+        expected_revision = None
         output = self.max_tokens if max_tokens is None else max_tokens
         if self.user_id and self.run_id:
             if self.context_runtime is None:
@@ -55,6 +56,7 @@ class LiteLLMClientWrapper:
                     prepared.messages,
                     prepared.effective_max_output_tokens,
                 )
+                expected_revision = prepared.manifest["model_revision"]
             elif purpose in ("summary", "judge"):
                 # Summary input is bounded by its own builder; dispatch applies
                 # the same model limits and authorization again below.
@@ -68,6 +70,7 @@ class LiteLLMClientWrapper:
                         target, {}
                     )
                 limits = resolve_model_limits(metadata, self.context_runtime.policy)
+                expected_revision = limits.revision
                 output = min(output, limits.max_output_tokens)
                 reserve = max(
                     self.context_runtime.policy.safety_tokens,
@@ -76,11 +79,10 @@ class LiteLLMClientWrapper:
                         * self.context_runtime.policy.safety_fraction
                     ),
                 )
-                if (
-                    count_payload(messages, tools or [], target).tokens
-                    + output
-                    + reserve
-                    > limits.context_window
+                input_tokens = count_payload(messages, tools or [], target).tokens
+                if input_tokens + output + reserve > limits.context_window or (
+                    limits.max_input_tokens is not None
+                    and input_tokens > limits.max_input_tokens
                 ):
                     raise ValueError("Auxiliary model context exceeds budget")
             else:
@@ -99,6 +101,7 @@ class LiteLLMClientWrapper:
                 tools=tools,
                 temperature=temperature,
                 max_tokens=output,
+                expected_model_revision=expected_revision,
             )
             if self.context_runtime:
                 tracing.capture_payload(
@@ -116,6 +119,7 @@ class LiteLLMClientWrapper:
         tools: Optional[List[Dict[str, Any]]] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        expected_model_revision: Optional[str] = None,
     ):
         from app.billing import policy
 
@@ -131,9 +135,7 @@ class LiteLLMClientWrapper:
                 tools,
                 self.temperature if temperature is None else temperature,
                 max_tokens or self.max_tokens,
-                expected_model_revision=self.context_runtime.dispatch_revision
-                if self.context_runtime
-                else None,
+                expected_model_revision=expected_model_revision,
             )
         import litellm
 

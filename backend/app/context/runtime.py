@@ -25,6 +25,7 @@ from .manager import prepare_context
 from .history import load_groups
 from .summarization import maybe_summarize, source_digest
 from .tokens import count_payload
+from app.prompts.summarization import SUMMARY_PROMPT_SPEC
 
 
 class ContextRuntime:
@@ -76,11 +77,17 @@ class ContextRuntime:
                     )
                 )
             )
+            runs = {
+                r.id: (r.event_offset, r.created_at, r.id)
+                for r in db.scalars(select(Run).where(Run.session_id == chat.id))
+            }
+            group_runs = {g.id: g.id.split(":", 1)[0] for g in historical}
             for e in events:
                 if e.run_id not in represented and e.payload.get("type") in (
                     "user",
                     "assistant",
                 ):
+                    group_runs["legacy:" + str(e.id)] = e.run_id
                     historical.append(
                         ConversationGroup(
                             "legacy:" + str(e.id),
@@ -90,6 +97,15 @@ class ContextRuntime:
                             e.sequence,
                         )
                     )
+            # Local durable ordinals and legacy event sequences are incomparable.
+            # Order runs first, then normalize all groups onto one timeline.
+            historical.sort(
+                key=lambda g: (
+                    runs.get(group_runs[g.id], (0, 0, group_runs[g.id])),
+                    g.sequence,
+                )
+            )
+            historical = [replace(g, sequence=i) for i, g in enumerate(historical)]
             saved = list(
                 db.scalars(
                     select(ContextSummary)
@@ -126,7 +142,7 @@ class ContextRuntime:
                         block,
                         ["active:" + key],
                         revision,
-                        1000000000 + index,
+                        len(historical) + index,
                         True,
                     )
                 )
@@ -148,6 +164,9 @@ class ContextRuntime:
             if (
                 saved_summary.get("workspace_revision") == revision
                 and saved_summary.get("policy_hash") == self.policy.content_hash
+                and saved_summary.get("prompt_hash") == SUMMARY_PROMPT_SPEC.content_hash
+                and saved_summary.get("prompt_version") == SUMMARY_PROMPT_SPEC.version
+                and saved_summary.get("model") == model
                 and set(i for g in sources for i in g.source_ids) == ids
                 and source_digest(sources) == saved_summary.get("source_digest")
             ):

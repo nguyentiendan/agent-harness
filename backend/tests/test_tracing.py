@@ -60,3 +60,52 @@ class TraceTests(unittest.TestCase):
             rows = list(db.scalars(select(TracePayload)))
             self.assertEqual(len(rows), 1)
             self.assertNotIn("secret-token-value", str(rows[0].payload))
+
+    def test_failed_trace_creation_cannot_leave_orphans(self):
+        from app.observability.tracing import capture_payload
+        from app.context.policy import ContextPolicy
+        from app.platform.db import TracePayload
+        from dataclasses import replace
+        from sqlalchemy import select
+
+        with patch(
+            "app.observability.tracing.DB.begin",
+            side_effect=RuntimeError("temporary outage"),
+        ):
+            start_trace("r", {"scope_id": "s"})
+        sid = start_span("r", None, "model", {})
+        capture_payload(
+            "r", sid, {"text": "private"}, replace(ContextPolicy(), trace_payloads=True)
+        )
+        with DB() as db:
+            self.assertEqual(list(db.scalars(select(TraceSpan))), [])
+            self.assertEqual(list(db.scalars(select(TracePayload))), [])
+
+    def test_purge_cleans_preexisting_orphan_by_run(self):
+        from app.platform.db import User, Chat, Run, TracePayload
+        from app.observability.storage import purge_scopes
+
+        with DB.begin() as db:
+            db.add(User(id="u", username="orphan-user", password_hash="x", role="user"))
+            db.flush()
+            db.add(Chat(id="s", owner_id="u", title="test"))
+            db.flush()
+            db.add(
+                Run(
+                    id="r",
+                    session_id="s",
+                    request_id="r",
+                    body_hash="x",
+                    model="fake",
+                    event_offset=0,
+                )
+            )
+            db.add(TraceSpan(id="orphan", trace_id="r", kind="model"))
+            db.add(
+                TracePayload(id="payload", trace_id="r", payload={"text": "private"})
+            )
+        with DB.begin() as db:
+            purge_scopes(db, ["s"])
+        with DB() as db:
+            self.assertIsNone(db.get(TraceSpan, "orphan"))
+            self.assertIsNone(db.get(TracePayload, "payload"))

@@ -67,6 +67,8 @@ async def maybe_summarize(request, policy, llm, summaries_used: int) -> SummaryO
         - output
         - policy.safety_tokens
     )
+    if request.limits.max_input_tokens is not None:
+        budget = min(budget, request.limits.max_input_tokens)
     prompt = render_prompt(SUMMARY_PROMPT_SPEC, {})
     selected = []
 

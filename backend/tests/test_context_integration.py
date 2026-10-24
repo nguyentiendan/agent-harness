@@ -194,3 +194,110 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                     1000,
                     expected_model_revision="old",
                 )
+
+    async def test_summary_prompt_or_model_change_invalidates_cache(self):
+        from sqlalchemy import select
+        from app.platform.db import ContextSummary
+
+        await self.test_summary_publication_and_reuse()
+        runtime = ContextRuntime("u", "r")
+        from dataclasses import replace
+
+        runtime.policy = replace(runtime.policy, summary_trigger=0.2)
+        metadata = {"context_window": 20000, "max_output_tokens": 2000, "revision": "v"}
+        with patch("app.billing.catalog.lookup", return_value=metadata):
+            changed_model = await runtime.prepare(
+                [{"role": "user", "content": "now"}], "different", [], 2000, None
+            )
+            self.assertFalse(changed_model.manifest["summary_used"])
+            with DB.begin() as db:
+                row = db.scalar(select(ContextSummary))
+                row.payload = {**row.payload, "prompt_hash": "obsolete"}
+            changed_prompt = await runtime.prepare(
+                [{"role": "user", "content": "now"}], "fake", [], 2000, None
+            )
+            self.assertFalse(changed_prompt.manifest["summary_used"])
+
+    async def test_auxiliary_separate_input_limit(self):
+        from app.integrations.llm import LiteLLMClientWrapper
+        from unittest.mock import AsyncMock
+
+        llm = LiteLLMClientWrapper(default_model="fake", user_id="u", run_id="r")
+        with (
+            patch(
+                "app.billing.catalog.lookup",
+                return_value={
+                    "context_window": 20000,
+                    "max_input_tokens": 1000,
+                    "max_output_tokens": 2000,
+                    "revision": "v",
+                },
+            ),
+            patch.object(llm, "_dispatch", new=AsyncMock()),
+        ):
+            with self.assertRaises(ValueError):
+                await llm.complete(
+                    [{"role": "user", "content": "x" * 2000}], purpose="summary"
+                )
+
+    async def test_legacy_history_precedes_newer_correction(self):
+        from app.platform.db import Event
+        from app.context.history import append_records
+        from app.context.types import ConversationRecord
+
+        with DB.begin() as db:
+            for rid, created in [("old", 1), ("new", 2)]:
+                db.add(
+                    Run(
+                        id=rid,
+                        session_id="s",
+                        request_id=rid,
+                        body_hash="x",
+                        model="fake",
+                        event_offset=0,
+                        status="completed",
+                        created_at=created,
+                    )
+                )
+            db.flush()
+            db.add(
+                Event(
+                    session_id="s",
+                    run_id="old",
+                    sequence=10,
+                    payload={"type": "user", "text": "OLD use red"},
+                )
+            )
+            append_records(
+                db,
+                "s",
+                "new",
+                [
+                    ConversationRecord(
+                        "u",
+                        "user",
+                        {"role": "user", "content": "NEW correction blue"},
+                        "g",
+                    )
+                ],
+            )
+        runtime = ContextRuntime("u", "r")
+        with patch(
+            "app.billing.catalog.lookup",
+            return_value={
+                "context_window": 8000,
+                "max_output_tokens": 1000,
+                "revision": "v",
+            },
+        ):
+            out = await runtime.prepare(
+                [{"role": "user", "content": "CURRENT question"}],
+                "fake",
+                [],
+                1000,
+                None,
+            )
+        self.assertEqual(
+            [m["content"] for m in out.messages],
+            ["OLD use red", "NEW correction blue", "CURRENT question"],
+        )
