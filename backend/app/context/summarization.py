@@ -74,6 +74,19 @@ async def maybe_summarize(request, policy, llm, summaries_used: int) -> SummaryO
 
     def messages(groups):
         data = [{"source_ids": g.source_ids, "messages": g.messages} for g in groups]
+        if request.summary and request.summary_source_ids:
+            data.insert(
+                0,
+                {
+                    "source_ids": request.summary_source_ids,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": json.dumps(request.summary, ensure_ascii=False),
+                        }
+                    ],
+                },
+            )
         return [
             {"role": "system", "content": prompt.text},
             {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
@@ -104,12 +117,19 @@ async def maybe_summarize(request, policy, llm, summaries_used: int) -> SummaryO
         if not isinstance(text, str) or len(text.encode()) > output * 16:
             raise ValueError("Summary response exceeds limit")
         payload = validate_summary(
-            json.loads(text), {i for g in selected for i in g.source_ids}
+            json.loads(text),
+            set(request.summary_source_ids)
+            | {i for g in selected for i in g.source_ids},
         )
         return SummaryOutcome(
             summary={
                 "content": payload,
-                "source_ids": [i for g in selected for i in g.source_ids],
+                "source_ids": list(
+                    dict.fromkeys(
+                        request.summary_source_ids
+                        + [i for g in selected for i in g.source_ids]
+                    )
+                ),
                 "source_digest": source_digest(selected),
                 "first_sequence": selected[0].sequence,
                 "last_sequence": selected[-1].sequence,

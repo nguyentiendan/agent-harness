@@ -116,6 +116,12 @@ context:
   summary_input_fraction: 0.25
   recent_groups: 4
   tool_output_chars: 70000
+  tool_preview_chars: 2000
+  tool_min_preview_chars: 256
+  output_max_chars: 8000000
+  output_scope_chars: 64000000
+  output_read_chars: 8000
+  output_retention_days: 7
   workspace: /workspace
   trace_payloads: false
   trace_payload_chars: 16000

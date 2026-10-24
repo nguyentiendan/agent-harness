@@ -20,6 +20,12 @@ class ContextPolicy:
     summary_input_fraction: float = 0.25
     recent_groups: int = 4
     tool_output_chars: int = 70000
+    output_max_chars: int = 8000000
+    output_scope_chars: int = 64000000
+    output_read_chars: int = 8000
+    output_retention_days: int = 7
+    tool_preview_chars: int = 2000
+    tool_min_preview_chars: int = 256
     workspace: str = "/workspace"
     trace_payloads: bool = False
     trace_payload_chars: int = 16000
@@ -56,4 +62,13 @@ def load_context_policy(config: dict) -> ContextPolicy:
             )
         if not valid:
             raise ValueError(f"Invalid context setting: {key}")
+    if not (
+        256
+        <= policy.tool_min_preview_chars
+        <= policy.tool_preview_chars
+        <= policy.output_max_chars
+    ):
+        raise ValueError("Invalid tool preview limits")
+    if policy.output_scope_chars < policy.output_max_chars:
+        raise ValueError("Output scope quota must accommodate one maximum-size output")
     return policy

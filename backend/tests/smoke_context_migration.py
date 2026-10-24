@@ -71,7 +71,7 @@ with DB() as db:
     assert db.get(ExecutionScope, "migration-project").workspace_revision == 3
     assert (
         db.execute(text("select version_num from alembic_version")).scalar()
-        == "20261023_context_tracing"
+        == "20261025_tool_outputs"
     )
 print(
     "Migration upgraded twice; user/password/chat/run/budget/workspace fixtures preserved."

@@ -214,6 +214,17 @@ class ContextMessage(Base):
     __table_args__ = (UniqueConstraint("scope_id", "sequence"),)
 
 
+class ToolOutput(Base):
+    __tablename__ = "tool_outputs"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scope_id: Mapped[str] = mapped_column(String(36), index=True)
+    run_id: Mapped[str] = mapped_column(String(36))
+    workspace_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content: Mapped[str] = mapped_column(Text)
+    chars: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[float] = mapped_column(Float, index=True)
+
+
 class ContextSummary(Base):
     __tablename__ = "context_summaries"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)

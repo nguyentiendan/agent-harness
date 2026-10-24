@@ -28,6 +28,8 @@ ALLOWED = {
     "selected_group_ids",
     "omitted",
     "summary_used",
+    "summary_source_ids",
+    "summary_group_ids",
     "summary_reason",
     "tool_name",
     "tool_call_id",

@@ -3,6 +3,7 @@
 from sqlalchemy import select, delete
 from app.platform.db import (
     Run,
+    ToolOutput,
     ContextMessage,
     ContextSummary,
     TraceRecord,
@@ -25,11 +26,12 @@ def purge_scopes(db, ids):
     # Run IDs also recover children whose parent telemetry write failed.
     traces.extend(db.scalars(select(Run.id).where(Run.session_id.in_(ids))))
     purge_traces(db, traces)
-    for model in (ContextMessage, ContextSummary):
+    for model in (ContextMessage, ContextSummary, ToolOutput):
         db.execute(delete(model).where(model.scope_id.in_(ids)))
 
 
 def retain(db, now, policy):
+    db.execute(delete(ToolOutput).where(ToolOutput.expires_at <= now))
     # Repair historical partial writes even when their run no longer exists.
     for model in (TraceSpan, TracePayload, TraceExportJob):
         db.execute(delete(model).where(~model.trace_id.in_(select(TraceRecord.id))))

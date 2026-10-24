@@ -57,7 +57,18 @@ def prepare_context(request: ContextRequest, policy: ContextPolicy) -> PreparedC
             omitted.append({"id": group.id, "reason": "workspace_revision"})
         else:
             eligible.append(group)
-    ranked = sorted(eligible, key=lambda g: g.sequence, reverse=True)
+    covered = [
+        g
+        for g in eligible
+        if request.summary_source_ids
+        and set(g.source_ids).issubset(request.summary_source_ids)
+    ]
+    covered_ids = {g.id for g in covered}
+    ranked = sorted(
+        [g for g in eligible if g.id not in covered_ids],
+        key=lambda g: g.sequence,
+        reverse=True,
+    )
     recent, older = ranked[: policy.recent_groups], ranked[policy.recent_groups :]
     for group in recent:
         if count(selected + [group], []) <= budget:
@@ -79,6 +90,10 @@ def prepare_context(request: ContextRequest, policy: ContextPolicy) -> PreparedC
         ]
         if count(selected, candidate) <= budget:
             summary = candidate
+    if summary:
+        omitted.extend({"id": g.id, "reason": "summarized"} for g in covered)
+    else:
+        older = sorted(older + covered, key=lambda g: g.sequence, reverse=True)
     for group in older:
         if count(selected + [group], summary) <= budget:
             selected.append(group)
@@ -101,6 +116,8 @@ def prepare_context(request: ContextRequest, policy: ContextPolicy) -> PreparedC
         "policy_version": policy.version,
         "policy_hash": policy.content_hash,
         "summary_used": bool(summary),
+        "summary_source_ids": request.summary_source_ids if summary else [],
+        "summary_group_ids": [g.id for g in covered] if summary else [],
         "prompt_versions": [
             {
                 "id": HISTORICAL_SUMMARY_PROMPT_SPEC.id,

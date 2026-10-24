@@ -20,7 +20,7 @@ from app.observability import tracing
 from app.security.redaction import redact_text
 from .policy import load_context_policy
 from .limits import resolve_model_limits, effective_output_cap
-from .types import ContextRequest, ConversationGroup
+from .types import ContextRequest, ConversationGroup, ContextBudgetExceeded
 from .manager import prepare_context
 from .history import load_groups
 from .summarization import maybe_summarize, source_digest
@@ -114,6 +114,28 @@ class ContextRuntime:
                 )
             )
             scope_id = chat.id
+        # Archive large results before shrinking. Never rerun an action to recover output.
+        from .outputs import store_output, preview, read_output
+
+        messages = [dict(m) for m in messages]
+        for i, message in enumerate(messages):
+            text = message.get("content")
+            if message.get("role") != "tool" or not isinstance(text, str):
+                continue
+            try:
+                data = json.loads(text)
+                existing = data.get("output_id") if isinstance(data, dict) else None
+                if existing:
+                    read_output(self.run_id, existing, 0, 1, self.policy)
+            except (ValueError, TypeError):
+                existing = None
+            if len(text) > self.policy.tool_preview_chars:
+                ident = existing or store_output(
+                    self.run_id, message.get("tool_call_id", str(i)), text, self.policy
+                )
+                message["content"] = preview(
+                    text, ident, self.policy.tool_preview_chars
+                )
         # Public chat now passes only current-run text and policy preferences.
         # Generic direct callers retain their entire supplied payload as mandatory.
         mandatory = list(messages)
@@ -157,10 +179,11 @@ class ContextRuntime:
             list(tools or []),
             revision,
         )
+        all_groups = historical + active_groups
         for row in saved:
             saved_summary = row.payload
             ids = set(saved_summary.get("source_ids", []))
-            sources = [g for g in historical if set(g.source_ids).issubset(ids)]
+            sources = [g for g in all_groups if set(g.source_ids).issubset(ids)]
             if (
                 saved_summary.get("workspace_revision") == revision
                 and saved_summary.get("policy_hash") == self.policy.content_hash
@@ -171,9 +194,10 @@ class ContextRuntime:
                 and source_digest(sources) == saved_summary.get("source_digest")
             ):
                 request.summary = saved_summary["content"]
+                request.summary_source_ids = saved_summary["source_ids"]
                 break
         with tracing.span("context", {"policy_hash": self.policy.content_hash}) as sid:
-            prepared = prepare_context(request, self.policy)
+            prepared = self._fit_mandatory(request)
             full = count_payload(
                 messages + [m for g in historical for m in g.messages],
                 tools or [],
@@ -184,14 +208,18 @@ class ContextRuntime:
                 summary_complete
                 and full
                 > prepared.manifest["input_budget"] * self.policy.summary_trigger
-                and not request.summary
             ):
-                older = sorted(historical, key=lambda g: g.sequence)
+                older = sorted(all_groups, key=lambda g: g.sequence)
                 older = (
                     older[: -self.policy.recent_groups]
                     if len(older) > self.policy.recent_groups
                     else []
                 )
+                older = [
+                    g
+                    for g in older
+                    if not set(g.source_ids).issubset(request.summary_source_ids)
+                ]
                 with tracing.span("summary", {"purpose": "summary"}):
                     outcome = await maybe_summarize(
                         replace(request, groups=older),
@@ -205,17 +233,28 @@ class ContextRuntime:
                     # Recheck cancellation/liveness before publishing summary.
                     with DB.begin() as db:
                         run = db.get(Run, self.run_id)
+                        from .outputs import scope_for
+
+                        scope_for(db, self.run_id)
                         if not run or run.status != "running":
                             raise ValueError("Run stopped during summary")
                         safe = json.loads(redact_text(json.dumps(outcome.summary)))
+                        covered_ids = set(safe["source_ids"])
+                        covered = [
+                            g
+                            for g in all_groups
+                            if set(g.source_ids).issubset(covered_ids)
+                        ]
+                        safe["source_digest"] = source_digest(covered)
                         key = hashlib.sha256(
-                            json.dumps(safe, sort_keys=True).encode()
+                            (scope_id + json.dumps(safe, sort_keys=True)).encode()
                         ).hexdigest()
                         if not db.get(ContextSummary, key):
                             db.add(
                                 ContextSummary(id=key, scope_id=scope_id, payload=safe)
                             )
                     request.summary = safe["content"]
+                    request.summary_source_ids = safe["source_ids"]
                     prepared = prepare_context(request, self.policy)
             prepared.manifest["summary_reason"] = reason
             tracing.finish_span(sid, "completed", prepared.manifest)
@@ -231,3 +270,35 @@ class ContextRuntime:
                     {"type": "context", "manifest": prepared.manifest},
                 )
         return prepared
+
+    def _fit_mandatory(self, request):
+        """Shrink only recoverable tool payloads; never silently truncate user intent."""
+        from .outputs import store_output, preview
+
+        limit = self.policy.tool_preview_chars
+        while True:
+            try:
+                return prepare_context(request, self.policy)
+            except ContextBudgetExceeded:
+                limit //= 2
+                if limit < self.policy.tool_min_preview_chars:
+                    raise
+                changed = False
+                for m in request.mandatory:
+                    if m.get("role") != "tool" or len(m.get("content", "")) <= limit:
+                        continue
+                    text = m["content"]
+                    try:
+                        data = json.loads(text)
+                        ident = (
+                            data.get("output_id") if isinstance(data, dict) else None
+                        )
+                    except ValueError:
+                        ident = None
+                    ident = ident or store_output(
+                        self.run_id, m.get("tool_call_id", ""), text, self.policy
+                    )
+                    m["content"] = preview(text, ident, limit)
+                    changed = True
+                if not changed:
+                    raise

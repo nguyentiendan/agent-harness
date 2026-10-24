@@ -3,7 +3,8 @@
 import asyncio
 import json
 from . import client, lifecycle
-from app.context.history import bounded_output, record_protocol
+from app.context.history import record_protocol
+from app.context.outputs import ensure_capacity, store_output, read_output, preview
 from app.observability import tracing
 from app.config import load_config
 from app.context.policy import load_context_policy
@@ -45,6 +46,16 @@ for name, description, props, required in [
         ["path", "old", "new"],
     ),
     ("list_dir", "List regular files inside /workspace.", {}, []),
+    (
+        "read_tool_output",
+        "Read a page of an archived tool result from this chat and workspace revision. Offsets count characters.",
+        {
+            "output_id": {"type": "string"},
+            "offset": {"type": "integer", "minimum": 0},
+            "limit": {"type": "integer", "minimum": 1},
+        },
+        ["output_id", "offset", "limit"],
+    ),
 ]:
     SCHEMAS.append(
         {
@@ -124,11 +135,34 @@ async def run(llm, rid, history, model, emit):
                 raise RuntimeError("Invalid tool call.")
             emit({"type": "tool_call", "name": name, "args": args})
             with tracing.span("tool", {"tool_name": name, "tool_call_id": call.id}):
-                await asyncio.to_thread(lifecycle.prepare, rid)
-                result = await asyncio.to_thread(
-                    client.RunnerClient().execute, rid, {"op": name, **args}
+                if name == "read_tool_output":
+                    try:
+                        result = await asyncio.to_thread(
+                            read_output, rid, policy=policy, **args
+                        )
+                    except ValueError:
+                        result = {
+                            "error": "Tool output unavailable or invalid pagination. Do not repeat a past side effect to recover it."
+                        }
+                else:
+                    await asyncio.to_thread(ensure_capacity, rid, policy)
+                    await asyncio.to_thread(lifecycle.prepare, rid)
+                    result = await asyncio.to_thread(
+                        client.RunnerClient().execute, rid, {"op": name, **args}
+                    )
+            raw = json.dumps(result, ensure_ascii=False)
+            output_id = await asyncio.to_thread(
+                store_output, rid, group_id + ":" + call.id, raw, policy
+            )
+            output = (
+                preview(
+                    raw,
+                    output_id,
+                    min(policy.tool_output_chars, policy.tool_preview_chars),
                 )
-            output = bounded_output(result, policy.tool_output_chars)
+                if len(raw) > min(policy.tool_output_chars, policy.tool_preview_chars)
+                else raw
+            )
             emit({"type": "tool_result", "name": name, "output": output})
             messages.append(
                 {"role": "tool", "tool_call_id": call.id, "content": output}

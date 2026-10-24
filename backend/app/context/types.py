@@ -42,6 +42,7 @@ class ContextRequest:
     tools: list[dict] = field(default_factory=list)
     workspace_revision: int | None = None
     summary: dict | None = None
+    summary_source_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
