@@ -6,6 +6,7 @@ import time
 from sqlalchemy import select, func, delete
 from app.platform.db import DB, Run, Chat, Project, User, ToolOutput
 from app.security.redaction import redact_text
+from .types import ContextBudgetExceeded
 
 
 def scope_for(db, run_id):
@@ -45,7 +46,7 @@ def ensure_capacity(run_id, policy):
     with DB.begin() as db:
         scope, _ = scope_for(db, run_id)
         if available(db, scope, policy) < policy.output_max_chars:
-            raise ValueError(
+            raise ContextBudgetExceeded(
                 "Tool output storage quota exhausted; no tool was executed"
             )
 
@@ -53,7 +54,7 @@ def ensure_capacity(run_id, policy):
 def store_output(run_id, key, text, policy):
     text = redact_text(text)
     if len(text) > policy.output_max_chars:
-        raise ValueError(
+        raise ContextBudgetExceeded(
             "Executed tool output exceeds storage limit; do not repeat the action"
         )
     ident = hashlib.sha256((run_id + "\0" + key + "\0" + text).encode()).hexdigest()
@@ -66,7 +67,7 @@ def store_output(run_id, key, text, policy):
             db.delete(row)
             db.flush()
         if available(db, scope, policy) < len(text):
-            raise ValueError(
+            raise ContextBudgetExceeded(
                 "Executed tool output cannot be archived: quota exhausted; do not repeat the action"
             )
         db.add(
@@ -100,13 +101,20 @@ def read_output(run_id, output_id, offset, limit, policy):
                 "Tool output unavailable in this scope/revision or expired"
             )
         end = min(offset + limit, row.chars)
-        return {
-            "output_id": row.id,
-            "content": row.content[offset:end],
-            "offset": offset,
-            "next_offset": end if end < row.chars else None,
-            "total_chars": row.chars,
-        }
+        return fit_page(
+            {
+                "output_id": row.id,
+                "content": row.content[offset:end],
+                "offset": offset,
+                "next_offset": end if end < row.chars else None,
+                "total_chars": row.chars,
+            },
+            min(
+                policy.output_read_chars,
+                policy.tool_preview_chars,
+                policy.tool_output_chars,
+            ),
+        )
 
 
 def preview(text, output_id, max_chars):
@@ -129,10 +137,37 @@ def preview(text, output_id, max_chars):
         pass
     base = len(json.dumps(data, ensure_ascii=False))
     if base > max_chars:
-        raise ValueError("Tool output reference cannot fit the context budget")
+        raise ContextBudgetExceeded(
+            "Tool output reference cannot fit the context budget"
+        )
     fragment = text[: max_chars - base]
     data["preview"] = fragment
     while len(json.dumps(data, ensure_ascii=False)) > max_chars:
         fragment = fragment[: len(fragment) // 2]
         data["preview"] = fragment
     return json.dumps(data, ensure_ascii=False)
+
+
+def is_page(data):
+    return (
+        isinstance(data, dict)
+        and isinstance(data.get("content"), str)
+        and isinstance(data.get("output_id"), str)
+        and type(data.get("offset")) is int
+        and type(data.get("total_chars")) is int
+        and "next_offset" in data
+    )
+
+
+def fit_page(data, max_chars):
+    """Bound the serialized page while retaining a cursor into the original artifact."""
+    data = dict(data)
+    while len(json.dumps(data, ensure_ascii=False)) > max_chars:
+        if not data["content"]:
+            raise ContextBudgetExceeded(
+                "Tool output page metadata exceeds context budget"
+            )
+        data["content"] = data["content"][: len(data["content"]) // 2]
+        end = data["offset"] + len(data["content"])
+        data["next_offset"] = end if end < data["total_chars"] else None
+    return data

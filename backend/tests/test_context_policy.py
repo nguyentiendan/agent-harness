@@ -11,6 +11,7 @@ class ContextPolicyTests(unittest.TestCase):
             {"recent_groups": -1},
             {"summary_enabled": "false"},
             {"unknown": 1},
+            {"tool_output_chars": 1},
         ):
             with self.assertRaises(ValueError):
                 load_context_policy({"context": settings})

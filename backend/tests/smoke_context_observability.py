@@ -82,8 +82,7 @@ class ContextSmoke(unittest.TestCase):
                     )
                 self.assertTrue(
                     any(
-                        m.get("role") == "tool"
-                        and "bytes" in str(m.get("content"))
+                        m.get("role") == "tool" and "bytes" in str(m.get("content"))
                         for m in model.call_args_list[2].args[0]
                     )
                 )
@@ -100,6 +99,93 @@ class ContextSmoke(unittest.TestCase):
                 ).status_code,
                 404,
             )
+        finally:
+            runner.purge(self.a, pid)
+
+    def test_large_output_recovery_does_not_repeat_docker_action(self):
+        import json
+
+        self.login()
+        pid = self.client.post("/api/projects", json={"name": "Recovery smoke"}).json()[
+            "id"
+        ]
+        sid = self.client.post("/api/sessions", json={"project_id": pid}).json()[
+            "session_id"
+        ]
+        runner = RunnerClient()
+        seen = []
+
+        async def dispatch(messages, **kwargs):
+            seen.append(messages)
+            if len(seen) == 1:
+                return answer(
+                    calls=[
+                        (
+                            "bash",
+                            {
+                                "command": "printf 1 >> once.txt; python3 -c 'print(chr(120)*12000)'"
+                            },
+                        )
+                    ]
+                )
+            data = json.loads(messages[-1]["content"])
+            if len(seen) == 2:
+                self.assertEqual(data["exit_code"], 0)
+                self.assertTrue(data["truncated"])
+                return answer(
+                    calls=[
+                        (
+                            "read_tool_output",
+                            {
+                                "output_id": data["output_id"],
+                                "offset": 4000,
+                                "limit": 8000,
+                            },
+                        )
+                    ]
+                )
+            self.assertEqual(data["content"], "x" * len(data["content"]))
+            self.assertEqual(data["offset"], 4000)
+            self.assertEqual(data["next_offset"], 4000 + len(data["content"]))
+            return answer("Recovered output without repeating the command")
+
+        try:
+            with (
+                patch.dict(os.environ, SANDBOX_ENABLED="true"),
+                patch(
+                    "app.billing.catalog.lookup",
+                    return_value={
+                        "context_window": 64000,
+                        "max_output_tokens": 4096,
+                        "revision": "smoke",
+                    },
+                ),
+                patch(
+                    "app.integrations.llm.LiteLLMClientWrapper._dispatch",
+                    new=AsyncMock(side_effect=dispatch),
+                ),
+            ):
+                result = self.client.post(
+                    "/api/harness/start",
+                    json={
+                        "session_id": sid,
+                        "request_id": "recovery",
+                        "goal": "Run once and inspect long output",
+                    },
+                )
+                self.assertEqual(result.status_code, 200, result.text)
+                for _ in range(300):
+                    status = self.client.get(f"/api/harness/status/{sid}").json()[
+                        "status"
+                    ]
+                    if status != "running":
+                        break
+                    time.sleep(0.05)
+                self.assertEqual(status, "completed")
+                self.assertEqual(len(seen), 3)
+                self.assertEqual(
+                    runner.files(self.a, pid, "read_file", "once.txt")["content"], "1"
+                )
         finally:
             runner.purge(self.a, pid)
 

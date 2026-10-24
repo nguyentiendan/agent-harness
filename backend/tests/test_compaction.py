@@ -319,3 +319,100 @@ class CompactionTests(unittest.IsolatedAsyncioTestCase):
                         lambda e: None,
                     )
         runner.execute.assert_not_called()
+
+    async def test_recovery_pages_keep_offsets(self):
+        await self._recover_without_write(64000)
+
+    async def test_recovery_works_at_full_quota(self):
+        await self._recover_without_write(12000)
+
+    async def _recover_without_write(self, capacity):
+        from app.execution.agent import run
+        from app.context.outputs import store_output
+        from app.platform.db import ToolOutput
+        from sqlalchemy import select
+        from unittest.mock import patch
+        from test_evaluation_tasks import answer
+
+        policy = replace(
+            self.runtime().policy, output_max_chars=12000, output_scope_chars=capacity
+        )
+        key = store_output("r", "full", "x" * 12000, policy)
+        count = 0
+
+        async def complete(messages, **kwargs):
+            nonlocal count
+            count += 1
+            if count == 1:
+                return answer(
+                    calls=[
+                        (
+                            "read_tool_output",
+                            {"output_id": key, "offset": 100, "limit": 8000},
+                        )
+                    ]
+                )
+            page = json.loads(messages[-1]["content"])
+            self.assertEqual(page["output_id"], key)
+            self.assertEqual(page["offset"], 100)
+            self.assertEqual(page["next_offset"], 100 + len(page["content"]))
+            self.assertEqual(page["total_chars"], 12000)
+            return answer("read")
+
+        with patch(
+            "app.execution.agent.load_config",
+            return_value={
+                "context": {"output_max_chars": 12000, "output_scope_chars": capacity}
+            },
+        ):
+            await run(
+                SimpleNamespace(complete=complete), "r", [], "fake", lambda e: None
+            )
+        with DB() as db:
+            self.assertEqual(len(list(db.scalars(select(ToolOutput)))), 1)
+
+    async def test_active_summary_reused_in_next_run(self):
+        from app.context.history import record_protocol
+        from app.platform.db import Run
+
+        self.calls = []
+        messages = self.groups()
+        for index in range(6):
+            record_protocol(
+                "r", f"turn:{index}:assistant", messages[1 + index * 2], f"turn:{index}"
+            )
+            record_protocol(
+                "r", f"turn:{index}:{index}", messages[2 + index * 2], f"turn:{index}"
+            )
+        runtime = self.runtime()
+        first = await self.prepare(runtime, messages)
+        with DB.begin() as db:
+            db.get(Run, "r").status = "completed"
+            db.add(
+                Run(
+                    id="r2",
+                    session_id="s",
+                    request_id="r2",
+                    body_hash="x",
+                    model="fake",
+                    event_offset=10,
+                )
+            )
+        next_runtime = ContextRuntime("u", "r2")
+        next_runtime.policy = runtime.policy
+        with patch(
+            "app.billing.catalog.lookup",
+            return_value={
+                "context_window": 6000,
+                "max_output_tokens": 500,
+                "revision": "v",
+            },
+        ):
+            out = await next_runtime.prepare(
+                [{"role": "user", "content": "next"}], "fake", [], 500, None
+            )
+        self.assertTrue(out.manifest["summary_used"])
+        self.assertEqual(
+            set(first.manifest["summary_source_ids"]),
+            set(out.manifest["summary_source_ids"]),
+        )

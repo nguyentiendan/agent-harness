@@ -151,18 +151,23 @@ async def run(llm, rid, history, model, emit):
                         client.RunnerClient().execute, rid, {"op": name, **args}
                     )
             raw = json.dumps(result, ensure_ascii=False)
-            output_id = await asyncio.to_thread(
-                store_output, rid, group_id + ":" + call.id, raw, policy
-            )
-            output = (
-                preview(
-                    raw,
-                    output_id,
-                    min(policy.tool_output_chars, policy.tool_preview_chars),
+            if name == "read_tool_output":
+                # Recovery is read-only, including when archive storage is full.
+                output = raw
+            else:
+                output_id = await asyncio.to_thread(
+                    store_output, rid, group_id + ":" + call.id, raw, policy
                 )
-                if len(raw) > min(policy.tool_output_chars, policy.tool_preview_chars)
-                else raw
-            )
+                output = (
+                    preview(
+                        raw,
+                        output_id,
+                        min(policy.tool_output_chars, policy.tool_preview_chars),
+                    )
+                    if len(raw)
+                    > min(policy.tool_output_chars, policy.tool_preview_chars)
+                    else raw
+                )
             emit({"type": "tool_result", "name": name, "output": output})
             messages.append(
                 {"role": "tool", "tool_call_id": call.id, "content": output}

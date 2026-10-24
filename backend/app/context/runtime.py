@@ -59,6 +59,9 @@ class ContextRuntime:
             )
             revision = (run.workspace_snapshot or {}).get("revision")
             historical = load_groups(db, chat.id)
+            durable_active = {
+                g.id: g for g in historical if g.id.startswith(self.run_id + ":")
+            }
             # Current run is in the live messages; only replay earlier runs.
             historical = [
                 g for g in historical if not g.id.startswith(self.run_id + ":")
@@ -115,7 +118,7 @@ class ContextRuntime:
             )
             scope_id = chat.id
         # Archive large results before shrinking. Never rerun an action to recover output.
-        from .outputs import store_output, preview, read_output
+        from .outputs import store_output, preview, read_output, is_page, fit_page
 
         messages = [dict(m) for m in messages]
         for i, message in enumerate(messages):
@@ -129,6 +132,11 @@ class ContextRuntime:
                     read_output(self.run_id, existing, 0, 1, self.policy)
             except (ValueError, TypeError):
                 existing = None
+            if existing and is_page(data):
+                message["content"] = json.dumps(
+                    fit_page(data, self.policy.tool_preview_chars), ensure_ascii=False
+                )
+                continue
             if len(text) > self.policy.tool_preview_chars:
                 ident = existing or store_output(
                     self.run_id, message.get("tool_call_id", str(i)), text, self.policy
@@ -158,6 +166,23 @@ class ContextRuntime:
                 key = hashlib.sha256(
                     json.dumps(block, sort_keys=True).encode()
                 ).hexdigest()
+                durable = durable_active.get(f"{self.run_id}:turn:{index}")
+                if durable:
+                    durable_calls = [
+                        c["id"]
+                        for m in durable.messages
+                        for c in m.get("tool_calls", [])
+                    ]
+                    if durable_calls != calls:
+                        raise ValueError(
+                            "Active context does not match durable tool provenance"
+                        )
+                    active_groups.append(
+                        replace(
+                            durable, sequence=len(historical) + index, current_run=True
+                        )
+                    )
+                    continue
                 active_groups.append(
                     ConversationGroup(
                         "active:" + key,
@@ -273,7 +298,7 @@ class ContextRuntime:
 
     def _fit_mandatory(self, request):
         """Shrink only recoverable tool payloads; never silently truncate user intent."""
-        from .outputs import store_output, preview
+        from .outputs import store_output, preview, read_output, is_page, fit_page
 
         limit = self.policy.tool_preview_chars
         while True:
@@ -295,6 +320,12 @@ class ContextRuntime:
                         )
                     except ValueError:
                         ident = None
+                    if ident and is_page(data):
+                        m["content"] = json.dumps(
+                            fit_page(data, limit), ensure_ascii=False
+                        )
+                        changed = True
+                        continue
                     ident = ident or store_output(
                         self.run_id, m.get("tool_call_id", ""), text, self.policy
                     )

@@ -69,6 +69,8 @@ def load_context_policy(config: dict) -> ContextPolicy:
         <= policy.output_max_chars
     ):
         raise ValueError("Invalid tool preview limits")
+    if policy.tool_output_chars < policy.tool_min_preview_chars:
+        raise ValueError("Tool output limit must accommodate recovery metadata")
     if policy.output_scope_chars < policy.output_max_chars:
         raise ValueError("Output scope quota must accommodate one maximum-size output")
     return policy
