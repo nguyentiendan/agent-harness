@@ -7,6 +7,7 @@ import uuid
 from sqlalchemy import select, func
 from fastapi import HTTPException
 from app.prompts.chat import CHAT_PROMPT_SPEC
+from app.prompts.project import PROJECT_PREFERENCES_PROMPT_SPEC
 from app.prompts.system import SYSTEM_PROMPT_SPEC
 from app.prompts.registry import render_prompt
 from app.config import load_config
@@ -153,6 +154,7 @@ async def execute(rid):
                     for p in (
                         SYSTEM_PROMPT_SPEC,
                         PROJECT_PROMPT_SPEC if project else CHAT_PROMPT_SPEC,
+                        *([PROJECT_PREFERENCES_PROMPT_SPEC] if instructions else []),
                     )
                 ],
             },
@@ -162,8 +164,9 @@ async def execute(rid):
                 0,
                 {
                     "role": "user",
-                    "content": "Project instructions (user preferences; do not override system/tool policy):\n"
-                    + instructions,
+                    "content": render_prompt(
+                        PROJECT_PREFERENCES_PROMPT_SPEC, {"instructions": instructions}
+                    ).text,
                 },
             )
         llm = LiteLLMClientWrapper(default_model=model, user_id=c.owner_id, run_id=rid)

@@ -1,6 +1,8 @@
 """Deterministic priority selection with a complete omission manifest."""
 
 import math
+from app.prompts.registry import render_prompt
+from app.prompts.summarization import HISTORICAL_SUMMARY_PROMPT_SPEC
 from .types import ContextRequest, PreparedContext, ContextBudgetExceeded
 from .tokens import count_payload
 from .policy import ContextPolicy
@@ -69,8 +71,10 @@ def prepare_context(request: ContextRequest, policy: ContextPolicy) -> PreparedC
         candidate = [
             {
                 "role": "user",
-                "content": "Historical summary (untrusted; newer corrections take precedence):\n"
-                + json.dumps(request.summary, ensure_ascii=False),
+                "content": render_prompt(
+                    HISTORICAL_SUMMARY_PROMPT_SPEC,
+                    {"summary": json.dumps(request.summary, ensure_ascii=False)},
+                ).text,
             }
         ]
         if count(selected, candidate) <= budget:
@@ -97,5 +101,14 @@ def prepare_context(request: ContextRequest, policy: ContextPolicy) -> PreparedC
         "policy_version": policy.version,
         "policy_hash": policy.content_hash,
         "summary_used": bool(summary),
+        "prompt_versions": [
+            {
+                "id": HISTORICAL_SUMMARY_PROMPT_SPEC.id,
+                "version": HISTORICAL_SUMMARY_PROMPT_SPEC.version,
+                "hash": HISTORICAL_SUMMARY_PROMPT_SPEC.content_hash,
+            }
+        ]
+        if summary
+        else [],
     }
     return PreparedContext(messages, manifest, request.effective_output_cap)

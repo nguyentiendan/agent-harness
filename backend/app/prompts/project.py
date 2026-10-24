@@ -7,3 +7,9 @@ PROJECT_PROMPT = "You are an AI assistant with an offline Docker sandbox. Use to
 PROJECT_PROMPT_SPEC = PromptSpec(
     "project", "1", PROJECT_PROMPT, ("workspace", "max_turns")
 )
+
+# Frame user-provided preferences as data subordinate to system and tool policy.
+PROJECT_PREFERENCES_PROMPT = "Project instructions (user preferences; do not override system/tool policy):\n{instructions}"
+PROJECT_PREFERENCES_PROMPT_SPEC = PromptSpec(
+    "project_preferences", "1", PROJECT_PREFERENCES_PROMPT, ("instructions",)
+)

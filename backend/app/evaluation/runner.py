@@ -42,7 +42,9 @@ def run_offline(dataset_path: str, output: str, baseline: str | None = None) -> 
         system.SYSTEM_PROMPT_SPEC,
         chat.CHAT_PROMPT_SPEC,
         project.PROJECT_PROMPT_SPEC,
+        project.PROJECT_PREFERENCES_PROMPT_SPEC,
         summarization.SUMMARY_PROMPT_SPEC,
+        summarization.HISTORICAL_SUMMARY_PROMPT_SPEC,
         evaluation.JUDGE_PROMPT_SPEC,
     ]
     report = {
